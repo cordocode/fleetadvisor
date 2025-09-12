@@ -12,12 +12,33 @@ const supabase = createClient(
 
 export async function GET() {
   try {
-    // Load the service account key
-    const keyPath = path.join(process.cwd(), 'private', 'google-service-account.json');
-    const auth = new google.auth.GoogleAuth({
-      keyFile: keyPath,
-      scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'],
-    });
+    let auth;
+    
+    // Check if we have the service account as an environment variable (Vercel)
+    if (process.env.GOOGLE_SERVICE_ACCOUNT) {
+      console.log('Using Google service account from environment variable');
+      const serviceAccount = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT);
+      
+      auth = new google.auth.GoogleAuth({
+        credentials: serviceAccount,
+        scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'],
+      });
+    } 
+    // Fall back to file for local development
+    else {
+      console.log('Using Google service account from file (local development)');
+      const keyPath = path.join(process.cwd(), 'private', 'google-service-account.json');
+      
+      // Check if file exists for better error handling
+      if (!fs.existsSync(keyPath)) {
+        throw new Error('Google service account file not found and GOOGLE_SERVICE_ACCOUNT env var not set');
+      }
+      
+      auth = new google.auth.GoogleAuth({
+        keyFile: keyPath,
+        scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'],
+      });
+    }
 
     const sheets = google.sheets({ version: 'v4', auth });
     
