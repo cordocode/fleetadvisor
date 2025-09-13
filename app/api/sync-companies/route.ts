@@ -30,6 +30,7 @@ export async function GET() {
       const keyPath = path.join(process.cwd(), 'private', 'google-service-account.json');
       
       // Check if file exists for better error handling
+      const fs = await import('fs');
       if (!fs.existsSync(keyPath)) {
         throw new Error('Google service account file not found and GOOGLE_SERVICE_ACCOUNT env var not set');
       }

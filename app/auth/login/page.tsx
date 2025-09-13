@@ -36,7 +36,7 @@ export default function LoginPage() {
 
     try {
       // Sign in with Supabase Auth
-      const { data, error } = await supabase.auth.signInWithPassword({
+      const { error } = await supabase.auth.signInWithPassword({
         email,
         password,
       });
@@ -50,7 +50,7 @@ export default function LoginPage() {
       // Redirect to dashboard on successful login
       router.push('/dashboard');
       
-    } catch (err) {
+    } catch {
       setError('An unexpected error occurred');
       setLoading(false);
     }
@@ -125,7 +125,7 @@ export default function LoginPage() {
 
           <div className="text-center">
             <span className="text-sm text-gray-600">
-              Don't have an account?{' '}
+              Don&apos;t have an account?{' '}
               <a href="/auth/signup" className="font-medium text-indigo-600 hover:text-indigo-500">
                 Sign up
               </a>

@@ -3,15 +3,23 @@
 import { useEffect, useState } from 'react'
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs'
 import { useRouter } from 'next/navigation'
+import { User } from '@supabase/supabase-js'
+
+interface ChatMessage {
+  role: string;
+  content: string;
+  files?: Array<{
+    url: string;
+    name: string;
+    date: string;
+  }>;
+}
 
 export default function Dashboard() {
-  const [user, setUser] = useState<any>(null)
   const [company, setCompany] = useState<string>('')
   const [loading, setLoading] = useState(true)
   const [message, setMessage] = useState('')
-  const [chatHistory, setChatHistory] = useState<
-    Array<{ role: string; content: string; files?: any[] }>
-  >([])
+  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([])
 
   const router = useRouter()
   const supabase = createClientComponentClient()
@@ -26,8 +34,6 @@ export default function Dashboard() {
         router.push('/auth/login')
         return
       }
-
-      setUser(user)
 
       try {
         const { data: profile, error: profileError } = await supabase

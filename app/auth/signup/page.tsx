@@ -62,8 +62,9 @@ export default function SignUpPage() {
         // Success! Redirect to main app
         router.push('/auth/login?message=Check your email to verify your account');
       }
-    } catch (err: any) {
-      setError(err.message || 'An error occurred during signup');
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : 'An error occurred during signup';
+      setError(errorMessage);
     } finally {
       setLoading(false);
     }
