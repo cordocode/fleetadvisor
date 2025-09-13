@@ -62,7 +62,7 @@ export async function GET() {
     })).filter(company => company.name && company.code);
 
     // Upsert companies to Supabase
-    const { data, error } = await supabase
+    const { error } = await supabase
       .from('companies')
       .upsert(companies, { 
         onConflict: 'code',
