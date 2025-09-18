@@ -1,48 +1,45 @@
 import { NextResponse } from 'next/server';
+import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
+
+// Disable worker in serverless
+pdfjsLib.GlobalWorkerOptions.workerSrc = '';
 
 export async function POST(request: Request) {
   try {
-    // Dynamically import pdf-parse
-    const pdf = (await import('pdf-parse')).default;
-
     const formData = await request.formData();
-
-    // Debug: log all field names
-    const keys = [...formData.keys()];
-    console.log("FormData keys received:", keys);
-
-    // Try to grab 'file' field
     const file = formData.get('file') as File | null;
 
     if (!file) {
-      console.error("No file found under 'file'. Available keys:", keys);
       return NextResponse.json(
-        { success: false, error: 'No file provided', availableKeys: keys },
+        { success: false, error: 'No file provided' },
         { status: 400 }
       );
     }
 
     // Convert to buffer
     const bytes = await file.arrayBuffer();
-    const buffer = Buffer.from(bytes);
+    const buffer = new Uint8Array(bytes);
 
-    // Debug file info (no any)
-    console.log("File received:", {
-      name: file.name,
-      size: buffer.length,
-      type: file.type,
-    });
+    // Load PDF
+    const loadingTask = pdfjsLib.getDocument({ data: buffer });
+    const pdf = await loadingTask.promise;
 
-    // Parse PDF
-    const data = await pdf(buffer);
-    const text = data.text;
+    // Extract plain text
+    let text = '';
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      text += content.items.map((item: any) => item.str).join(' ');
+    }
 
+    // Normalize text
     const normalizedText = text
       .toLowerCase()
-      .replace(/\s+/g, ' ')
-      .replace(/[^\x20-\x7E]/g, '')
+      .replace(/\s+/g, ' ')          // collapse whitespace
+      .replace(/[^\x20-\x7E]/g, '')  // strip weird OCR chars
       .trim();
 
+    // Pattern check
     const dotPassPattern = /dot\s+pass\s*:\s*checked/;
     const isDotInspection = dotPassPattern.test(normalizedText);
 
