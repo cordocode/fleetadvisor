@@ -29,7 +29,10 @@ export async function POST(request: Request) {
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
       const content = await page.getTextContent();
-      text += content.items.map((item: any) => item.str).join(' ');
+      // content.items is an array of { str: string; ... }
+      for (const item of content.items as Array<{ str: string }>) {
+        text += item.str + ' ';
+      }
     }
 
     // Normalize text
