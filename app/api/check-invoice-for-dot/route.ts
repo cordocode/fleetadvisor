@@ -1,64 +1,118 @@
-import { NextResponse } from 'next/server';
-import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
+import { NextRequest, NextResponse } from 'next/server';
 
-// Disable worker in serverless
-pdfjsLib.GlobalWorkerOptions.workerSrc = '';
+// This will work in serverless - no filesystem or canvas dependencies
+const pdf = require('pdf-parse-fork');
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
+  console.log('=== DOT Check API Called ===');
+  console.log('Time:', new Date().toISOString());
+  
   try {
+    // Parse the incoming form data
     const formData = await request.formData();
     const file = formData.get('file') as File | null;
-
+    
     if (!file) {
+      console.log('ERROR: No file provided in request');
       return NextResponse.json(
-        { success: false, error: 'No file provided' },
+        { 
+          success: false, 
+          error: 'No file provided',
+          debug: 'File field missing from form data'
+        },
         { status: 400 }
       );
     }
 
-    // Convert to buffer
+    console.log('File received:', {
+      name: file.name,
+      size: file.size,
+      type: file.type
+    });
+
+    // Convert File to Buffer for pdf-parse-fork
     const bytes = await file.arrayBuffer();
-    const buffer = new Uint8Array(bytes);
+    const buffer = Buffer.from(bytes);
+    
+    console.log('Buffer created, size:', buffer.length);
 
-    // Load PDF
-    const loadingTask = pdfjsLib.getDocument({ data: buffer });
-    const pdf = await loadingTask.promise;
-
-    // Extract plain text
-    let text = '';
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page = await pdf.getPage(i);
-      const content = await page.getTextContent();
-      // content.items is an array of { str: string; ... }
-      for (const item of content.items as Array<{ str: string }>) {
-        text += item.str + ' ';
-      }
+    // Extract text from PDF
+    let pdfData;
+    try {
+      pdfData = await pdf(buffer);
+      console.log('PDF parsed successfully');
+      console.log('Number of pages:', pdfData.numpages);
+      console.log('Text length:', pdfData.text.length);
+    } catch (pdfError: any) {
+      console.error('PDF parsing failed:', pdfError);
+      return NextResponse.json(
+        { 
+          success: false, 
+          error: 'Failed to parse PDF',
+          details: pdfError.message
+        },
+        { status: 500 }
+      );
     }
 
-    // Normalize text
-    const normalizedText = text
+    // Normalize the extracted text for robust matching
+    const normalizedText = pdfData.text
       .toLowerCase()
-      .replace(/\s+/g, ' ')          // collapse whitespace
-      .replace(/[^\x20-\x7E]/g, '')  // strip weird OCR chars
+      .replace(/\s+/g, ' ')           // Collapse all whitespace to single spaces
+      .replace(/[^\x20-\x7E]/g, '')   // Remove non-ASCII characters (OCR artifacts)
       .trim();
+    
+    console.log('Normalized text sample (first 500 chars):');
+    console.log(normalizedText.substring(0, 500));
 
-    // Pattern check
+    // Check for DOT pattern with flexible spacing
+    // Looking for: "dot pass : checked" with variable spacing
     const dotPassPattern = /dot\s+pass\s*:\s*checked/;
     const isDotInspection = dotPassPattern.test(normalizedText);
+    
+    console.log('DOT pattern check:', isDotInspection ? 'FOUND' : 'NOT FOUND');
+    
+    // Additional debug - search for related terms
+    const debugInfo = {
+      containsDot: normalizedText.includes('dot'),
+      containsPass: normalizedText.includes('pass'),
+      containsChecked: normalizedText.includes('checked'),
+      containsInspection: normalizedText.includes('inspection'),
+      textLength: normalizedText.length
+    };
+    
+    console.log('Debug info:', debugInfo);
 
-    console.log('DOT Check - Found pattern:', isDotInspection);
-    console.log('Sample text:', normalizedText.substring(0, 500));
-
+    // Return result
     return NextResponse.json({
       success: true,
       isDotInspection,
-      textLength: normalizedText.length,
+      debug: {
+        ...debugInfo,
+        sampleText: normalizedText.substring(0, 200) // First 200 chars for debugging
+      }
     });
-  } catch (error) {
-    console.error('PDF parsing error:', error);
+
+  } catch (error: any) {
+    console.error('Unexpected error in DOT check:', error);
     return NextResponse.json(
-      { success: false, error: 'Failed to parse PDF', details: (error as Error).message },
+      { 
+        success: false, 
+        error: 'Internal server error',
+        details: error.message 
+      },
       { status: 500 }
     );
   }
+}
+
+// Also support GET for health check
+export async function GET() {
+  return NextResponse.json({ 
+    status: 'healthy',
+    endpoint: '/api/check-invoice-for-dot',
+    method: 'POST',
+    expects: 'multipart/form-data with file field',
+    timestamp: new Date().toISOString()
+  });
 }
