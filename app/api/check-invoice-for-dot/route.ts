@@ -26,11 +26,11 @@ export async function POST(request: Request) {
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
 
-    // Debug file info
+    // Debug file info (no any)
     console.log("File received:", {
-      name: (file as any).name,
+      name: file.name,
       size: buffer.length,
-      type: (file as any).type,
+      type: file.type,
     });
 
     // Parse PDF
