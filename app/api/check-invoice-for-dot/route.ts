@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-// @ts-ignore - pdf-parse-fork doesn't have TypeScript types
+// @ts-expect-error - pdf-parse-fork doesn't have TypeScript types
 import pdf from 'pdf-parse-fork';
 
 export async function POST(request: NextRequest) {
