@@ -1,7 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-
-// This will work in serverless - no filesystem or canvas dependencies
-const pdf = require('pdf-parse-fork');
+import pdf from 'pdf-parse-fork';
 
 export async function POST(request: NextRequest) {
   console.log('=== DOT Check API Called ===');
@@ -43,13 +41,13 @@ export async function POST(request: NextRequest) {
       console.log('PDF parsed successfully');
       console.log('Number of pages:', pdfData.numpages);
       console.log('Text length:', pdfData.text.length);
-    } catch (pdfError: any) {
+    } catch (pdfError: unknown) {
       console.error('PDF parsing failed:', pdfError);
       return NextResponse.json(
         { 
           success: false, 
           error: 'Failed to parse PDF',
-          details: pdfError.message
+          details: pdfError instanceof Error ? pdfError.message : 'Unknown error'
         },
         { status: 500 }
       );
@@ -93,13 +91,13 @@ export async function POST(request: NextRequest) {
       }
     });
 
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Unexpected error in DOT check:', error);
     return NextResponse.json(
       { 
         success: false, 
         error: 'Internal server error',
-        details: error.message 
+        details: error instanceof Error ? error.message : 'Unknown error'
       },
       { status: 500 }
     );
