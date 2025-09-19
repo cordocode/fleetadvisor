@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { PDFDocument, rgb } from 'pdf-lib';
-import sharp from 'sharp'; // npm install sharp
+import { PDFDocument } from 'pdf-lib';
+import sharp from 'sharp';
 
 export async function POST(request: NextRequest) {
-  console.log('=== File to PDF Merge API Called ===');
+  console.log('=== PDF Merge API Called ===');
   
   try {
     const formData = await request.formData();
@@ -20,26 +20,47 @@ export async function POST(request: NextRequest) {
     const mergedPdf = await PDFDocument.create();
 
     for (const file of files) {
-      const bytes = await file.arrayBuffer();
       const fileName = file.name.toLowerCase();
+      const bytes = await file.arrayBuffer();
+      console.log(`Processing ${fileName} - Size: ${(bytes.byteLength / 1024 / 1024).toFixed(2)}MB`);
       
       try {
         if (fileName.endsWith('.pdf')) {
-          // Handle PDF
+          // Handle PDF as before
           const pdf = await PDFDocument.load(bytes);
           const pages = await mergedPdf.copyPages(pdf, pdf.getPageIndices());
           pages.forEach(page => mergedPdf.addPage(page));
           
         } else if (fileName.match(/\.(jpg|jpeg|png)$/)) {
-          // Convert image to PDF page
-          const pngBuffer = await sharp(Buffer.from(bytes))
-            .png()
-            .toBuffer();
+          // Smart compression for images
+          let processedImageBuffer: Uint8Array;
           
-          const image = await mergedPdf.embedPng(pngBuffer);
+          // Only compress if over 500KB
+          if (bytes.byteLength > 500000) {
+            console.log(`Compressing ${fileName} from ${(bytes.byteLength / 1024 / 1024).toFixed(2)}MB`);
+            
+            const compressedBuffer = await sharp(Buffer.from(bytes))
+              .resize(2400, null, {
+                withoutEnlargement: true,
+                fit: 'inside'
+              })
+              .jpeg({ 
+                quality: 85,
+                mozjpeg: true
+              })
+              .toBuffer();
+              
+            processedImageBuffer = new Uint8Array(compressedBuffer);
+            console.log(`Compressed to ${(processedImageBuffer.length / 1024 / 1024).toFixed(2)}MB`);
+          } else {
+            processedImageBuffer = new Uint8Array(bytes);
+          }
+          
+          // Embed in PDF
+          const image = await mergedPdf.embedJpg(processedImageBuffer);
           const page = mergedPdf.addPage();
           
-          // Scale image to fit page
+          // Scale to fit page
           const { width, height } = image.scale(1);
           const pageWidth = page.getWidth();
           const pageHeight = page.getHeight();
@@ -60,6 +81,8 @@ export async function POST(request: NextRequest) {
     const mergedPdfBytes = await mergedPdf.save();
     const buffer = Buffer.from(mergedPdfBytes);
     
+    console.log(`Final PDF size: ${(buffer.length / 1024 / 1024).toFixed(2)}MB`);
+    
     return new NextResponse(buffer, {
       status: 200,
       headers: {
@@ -75,4 +98,11 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
+}
+
+export async function GET() {
+  return NextResponse.json({ 
+    status: 'healthy',
+    endpoint: '/api/merge-pdfs'
+  });
 }
