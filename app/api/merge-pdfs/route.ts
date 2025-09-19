@@ -1,73 +1,65 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, rgb } from 'pdf-lib';
+import sharp from 'sharp'; // npm install sharp
 
 export async function POST(request: NextRequest) {
-  console.log('=== PDF Merge API Called ===');
-  console.log('Time:', new Date().toISOString());
+  console.log('=== File to PDF Merge API Called ===');
   
   try {
-    // Parse the incoming form data
     const formData = await request.formData();
     const files = formData.getAll('files') as File[];
     
     if (!files || files.length === 0) {
-      console.log('ERROR: No files provided');
       return NextResponse.json(
-        { 
-          success: false, 
-          error: 'No files provided',
-          debug: 'Files field missing from form data'
-        },
+        { success: false, error: 'No files provided' },
         { status: 400 }
       );
     }
 
     console.log(`Received ${files.length} files to merge`);
-
-    // Create a new PDF document
     const mergedPdf = await PDFDocument.create();
 
-    // Process each PDF
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      console.log(`Processing file ${i + 1}:`, {
-        name: file.name,
-        size: file.size,
-        type: file.type
-      });
-
+    for (const file of files) {
+      const bytes = await file.arrayBuffer();
+      const fileName = file.name.toLowerCase();
+      
       try {
-        // Convert file to array buffer
-        const bytes = await file.arrayBuffer();
-        
-        // Load the PDF
-        const pdf = await PDFDocument.load(bytes);
-        
-        // Copy all pages from this PDF
-        const pages = await mergedPdf.copyPages(pdf, pdf.getPageIndices());
-        
-        // Add pages to merged document
-        pages.forEach((page) => {
-          mergedPdf.addPage(page);
-        });
-        
-        console.log(`Added ${pages.length} pages from ${file.name}`);
-      } catch (fileError: unknown) {
-        console.error(`Failed to process ${file.name}:`, fileError);
-        // Continue with other files even if one fails
+        if (fileName.endsWith('.pdf')) {
+          // Handle PDF
+          const pdf = await PDFDocument.load(bytes);
+          const pages = await mergedPdf.copyPages(pdf, pdf.getPageIndices());
+          pages.forEach(page => mergedPdf.addPage(page));
+          
+        } else if (fileName.match(/\.(jpg|jpeg|png)$/)) {
+          // Convert image to PDF page
+          const pngBuffer = await sharp(Buffer.from(bytes))
+            .png()
+            .toBuffer();
+          
+          const image = await mergedPdf.embedPng(pngBuffer);
+          const page = mergedPdf.addPage();
+          
+          // Scale image to fit page
+          const { width, height } = image.scale(1);
+          const pageWidth = page.getWidth();
+          const pageHeight = page.getHeight();
+          const scale = Math.min(pageWidth / width, pageHeight / height);
+          
+          page.drawImage(image, {
+            x: (pageWidth - width * scale) / 2,
+            y: (pageHeight - height * scale) / 2,
+            width: width * scale,
+            height: height * scale,
+          });
+        }
+      } catch (err) {
+        console.error(`Failed to process ${file.name}:`, err);
       }
     }
 
-    // Save the merged PDF
     const mergedPdfBytes = await mergedPdf.save();
-    
-    // Convert Uint8Array to Buffer for NextResponse
     const buffer = Buffer.from(mergedPdfBytes);
     
-    console.log(`Successfully merged ${files.length} PDFs`);
-    console.log(`Final PDF size: ${buffer.length} bytes`);
-
-    // Return the merged PDF as a response
     return new NextResponse(buffer, {
       status: 200,
       headers: {
@@ -77,25 +69,10 @@ export async function POST(request: NextRequest) {
     });
 
   } catch (error: unknown) {
-    console.error('Unexpected error in PDF merge:', error);
+    console.error('Error:', error);
     return NextResponse.json(
-      { 
-        success: false, 
-        error: 'Internal server error',
-        details: error instanceof Error ? error.message : 'Unknown error'
-      },
+      { success: false, error: 'Failed to merge files' },
       { status: 500 }
     );
   }
-}
-
-// Health check endpoint
-export async function GET() {
-  return NextResponse.json({ 
-    status: 'healthy',
-    endpoint: '/api/merge-pdfs',
-    method: 'POST',
-    expects: 'multipart/form-data with multiple files in "files" field',
-    timestamp: new Date().toISOString()
-  });
 }
