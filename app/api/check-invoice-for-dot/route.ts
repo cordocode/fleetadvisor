@@ -10,6 +10,7 @@ export async function POST(request: NextRequest) {
     // Parse the incoming form data
     const formData = await request.formData();
     const file = formData.get('file') as File | null;
+    const emailBody = formData.get('emailBody') as string | null;
     
     if (!file) {
       console.log('ERROR: No file provided in request');
@@ -28,20 +29,17 @@ export async function POST(request: NextRequest) {
       size: file.size,
       type: file.type
     });
+    console.log('Email body received:', emailBody ? `${emailBody.length} chars` : 'none');
 
     // Convert File to Buffer for pdf-parse-fork
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
     
-    console.log('Buffer created, size:', buffer.length);
-
     // Extract text from PDF
     let pdfData;
     try {
       pdfData = await pdf(buffer);
       console.log('PDF parsed successfully');
-      console.log('Number of pages:', pdfData.numpages);
-      console.log('Text length:', pdfData.text.length);
     } catch (pdfError: unknown) {
       console.error('PDF parsing failed:', pdfError);
       return NextResponse.json(
@@ -54,99 +52,46 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Normalize the extracted text for robust matching
-    const normalizedText = pdfData.text
+    // Normalize PDF text
+    const normalizedPdfText = pdfData.text
       .toLowerCase()
-      .replace(/\s+/g, ' ')           // Collapse all whitespace to single spaces
-      .replace(/[^\x20-\x7E]/g, '')   // Remove non-ASCII characters (OCR artifacts)
+      .replace(/\s+/g, ' ')
       .trim();
     
-    console.log('Normalized text sample (first 500 chars):');
-    console.log(normalizedText.substring(0, 500));
-
-    // PRIMARY CHECK: Look for "DOT PASS: checked" pattern
-    const dotPassPattern = /dot\s+pass\s*:\s*checked/;
-    const primaryCheckPassed = dotPassPattern.test(normalizedText);
+    // PRIMARY CHECK: ONLY look for "DOT PASS: checked" in the PDF
+    const dotPassCheckedPattern = /dot\s+pass\s*:\s*checked/;
+    const isDotPassChecked = dotPassCheckedPattern.test(normalizedPdfText);
     
-    console.log('PRIMARY CHECK (DOT PASS: checked):', primaryCheckPassed ? 'FOUND' : 'NOT FOUND');
+    console.log('PDF CHECK - DOT PASS: checked?', isDotPassChecked ? 'YES' : 'NO');
     
-    let isDotInspection = primaryCheckPassed;
-    let detectionMethod = primaryCheckPassed ? 'primary_checkbox' : 'none';
-    let matchedPattern = '';
+    let isDotInspection = isDotPassChecked;
+    let detectionMethod = isDotPassChecked ? 'pdf_checkbox' : 'none';
     
-    // SECONDARY CHECK: Only run if primary check failed
-    if (!primaryCheckPassed) {
-      console.log('Primary check failed, running secondary DOT service detection...');
+    // SECONDARY CHECK: Only check EMAIL BODY if PDF shows unchecked
+    if (!isDotPassChecked && emailBody) {
+      console.log('PDF shows unchecked, checking EMAIL BODY for DOT line items...');
       
-      // Patterns to look for DOT-related service items
-      // Using word boundaries (\b) to avoid matching DOT inside other words
-      const dotServicePatterns = [
-        /\bdot\s+inspection\b/i,                    // "DOT Inspection"
-        /\bdot\s+inspection\s+only\b/i,            // "DOT Inspection Only"
-        /\bdot\s+service\b/i,                      // "DOT Service"
-        /\bperformed\s+dot\s+inspection\b/i,       // "Performed DOT Inspection"
-        /\bdot\s+annual\b/i,                        // "DOT Annual"
-        /\bannual\s+dot\b/i,                        // "Annual DOT"
-        /\bdot\s+compliance\b/i,                    // "DOT Compliance"
-        /\bdot\s+safety\s+inspection\b/i,          // "DOT Safety Inspection"
-        /\bfederal\s+dot\b/i,                      // "Federal DOT"
-        /\bdot\s+pm\b/i,                           // "DOT PM" (Preventive Maintenance)
-        /\bdot\s+-\s+/i,                           // "DOT -" followed by description
-      ];
+      const normalizedEmailBody = emailBody.toLowerCase();
       
-      // Also check for DOT as a line item with quantity/price
-      // Pattern: DOT followed by description and then price indicators
-      const dotLineItemPattern = /\bdot\s+[^.]*\d+\.\d{2}/i;  // DOT followed by text and a price (e.g., 145.00)
+      // Look for DOT inspection as a line item in the email body
+      // These patterns indicate actual DOT service work
+      const dotInEmailBody = 
+        /\*\*dot\s+inspection/i.test(normalizedEmailBody) ||  // **DOT Inspection
+        /dot\s+inspection\s+only/i.test(normalizedEmailBody) || // DOT Inspection Only
+        /performed\s+dot\s+inspection/i.test(normalizedEmailBody) || // Performed DOT Inspection
+        /\bdot\s+inspection.*?\$\d+/i.test(normalizedEmailBody); // DOT inspection with price
       
-      // Check all patterns
-      for (const pattern of dotServicePatterns) {
-        if (pattern.test(normalizedText)) {
-          isDotInspection = true;
-          detectionMethod = 'secondary_service_item';
-          const match = normalizedText.match(pattern);
-          matchedPattern = match ? match[0] : '';
-          console.log(`SECONDARY CHECK MATCHED: Pattern "${pattern}" found "${matchedPattern}"`);
-          break;
-        }
-      }
-      
-      // Check for DOT line item pattern if not found yet
-      if (!isDotInspection && dotLineItemPattern.test(normalizedText)) {
+      if (dotInEmailBody) {
         isDotInspection = true;
-        detectionMethod = 'secondary_line_item';
-        const match = normalizedText.match(dotLineItemPattern);
-        matchedPattern = match ? match[0].substring(0, 50) : ''; // Limit to 50 chars
-        console.log(`SECONDARY CHECK MATCHED: DOT line item found "${matchedPattern}"`);
-      }
-      
-      // Additional context check: Look for DOT with surrounding invoice context
-      if (!isDotInspection) {
-        // Check if DOT appears near typical invoice keywords
-        const contextPattern = /(?:service|labor|inspection|performed|completed|charge|description|qty|rate).*?\bdot\b.*?(?:\$|\d+\.\d{2})/i;
-        if (contextPattern.test(normalizedText)) {
-          isDotInspection = true;
-          detectionMethod = 'secondary_context';
-          const match = normalizedText.match(contextPattern);
-          matchedPattern = match ? match[0].substring(0, 50) : '';
-          console.log(`SECONDARY CHECK MATCHED: DOT found in invoice context "${matchedPattern}"`);
-        }
+        detectionMethod = 'email_body_line_item';
+        console.log('FOUND DOT line item in email body');
+      } else {
+        console.log('No DOT line items found in email body');
       }
     }
     
-    // Additional debug info
-    const debugInfo = {
-      containsDot: normalizedText.includes('dot'),
-      containsPass: normalizedText.includes('pass'),
-      containsChecked: normalizedText.includes('checked'),
-      containsInspection: normalizedText.includes('inspection'),
-      textLength: normalizedText.length,
-      detectionMethod: detectionMethod,
-      matchedPattern: matchedPattern
-    };
-    
-    console.log('Final result:', isDotInspection ? 'IS DOT INSPECTION' : 'NOT DOT INSPECTION');
+    console.log('FINAL RESULT:', isDotInspection ? 'IS DOT' : 'NOT DOT');
     console.log('Detection method:', detectionMethod);
-    console.log('Debug info:', debugInfo);
 
     // Return result
     return NextResponse.json({
@@ -154,8 +99,9 @@ export async function POST(request: NextRequest) {
       isDotInspection,
       detectionMethod,
       debug: {
-        ...debugInfo,
-        sampleText: normalizedText.substring(0, 200) // First 200 chars for debugging
+        pdfHasCheckedBox: isDotPassChecked,
+        emailBodyProvided: !!emailBody,
+        emailBodyLength: emailBody ? emailBody.length : 0
       }
     });
 
@@ -178,7 +124,7 @@ export async function GET() {
     status: 'healthy',
     endpoint: '/api/check-invoice-for-dot',
     method: 'POST',
-    expects: 'multipart/form-data with file field',
+    expects: 'multipart/form-data with file (PDF) and emailBody (string)',
     timestamp: new Date().toISOString()
   });
 }
