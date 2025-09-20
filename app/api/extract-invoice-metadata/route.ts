@@ -7,6 +7,15 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
+// Suppress the Buffer deprecation warning for this specific module
+const originalEmitWarning = process.emitWarning;
+process.emitWarning = (warning: string | Error, ...args: any[]) => {
+  if (typeof warning === 'string' && warning.includes('Buffer() is deprecated')) {
+    return;
+  }
+  originalEmitWarning.apply(process, [warning, ...args] as any);
+};
+
 export async function POST(request: NextRequest) {
   console.log('=== Extract Invoice Metadata API Called ===');
   
