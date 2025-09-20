@@ -9,9 +9,21 @@ const supabase = createClient(
 
 export async function POST(request: Request) {
   try {
-    const { company, unitNumber, searchParams } = await request.json()
+    const { company, unitNumber, searchParams, userId } = await request.json()
     
-    console.log('Searching for files:', { company, unitNumber, searchParams })
+    // Check if user is admin
+    let isAdmin = false;
+    if (userId) {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('is_admin')
+        .eq('user_id', userId)
+        .single();
+      
+      isAdmin = profile?.is_admin || false;
+    }
+    
+    console.log('Searching for files:', { company, unitNumber, searchParams, isAdmin })
     
     // List all files in the DOT bucket
     const { data: files, error } = await supabase
@@ -30,32 +42,38 @@ export async function POST(request: Request) {
       )
     }
     
-    console.log('All files in bucket:', files)
+    console.log(`Total files in bucket: ${files?.length || 0}`)
     
     // Filter files based on search parameters
     const matchingFiles = files?.filter(file => {
-      // File must be for this company
-      if (!file.name.startsWith(company)) return false
+      // If NOT admin, file must be for this company
+      if (!isAdmin && !file.name.startsWith(company)) return false
+      
+      // For admin users, search across ALL companies
       
       // Check if it's a DOT file (has __dot__ after company name)
-      const isDotFile = file.name.includes(`${company}__dot__`)
+      const isDotFile = file.name.includes('__dot__')
       
       // If searchParams provided, use them; otherwise fall back to unitNumber
       if (searchParams) {
         // Build search patterns based on what was provided
         if (searchParams.unit) {
+          // Search for DOT files with this unit number
           return isDotFile && file.name.includes(`__U-${searchParams.unit}__`)
         }
         if (searchParams.invoice) {
+          // Search for files with this invoice number (both DOT and regular invoices)
           return file.name.includes(`__I-${searchParams.invoice}__`)
         }
         if (searchParams.vin) {
+          // Search for files with this VIN
           return file.name.includes(`__V-${searchParams.vin}__`)
         }
         if (searchParams.plate && searchParams.plate !== 'NA') {
+          // Search for files with this plate
           return file.name.includes(`__P-${searchParams.plate}`)
         }
-      } else if (unitNumber && unitNumber !== 'NOT_FOUND') {
+      } else if (unitNumber && unitNumber !== 'NOT_FOUND' && unitNumber !== 'AMBIGUOUS') {
         // Backward compatibility: search by unit number for DOT files only
         return isDotFile && file.name.includes(`__U-${unitNumber}__`)
       }
@@ -63,7 +81,10 @@ export async function POST(request: Request) {
       return false
     }) || []
     
-    console.log('Matching files:', matchingFiles)
+    console.log(`Matching files found: ${matchingFiles.length}`)
+    if (matchingFiles.length > 0) {
+      console.log('Sample matches:', matchingFiles.slice(0, 3).map(f => f.name))
+    }
     
     // Sort by date (newest first) - date is in filename as D-MMDDYYYY format
     const sortedFiles = matchingFiles.sort((a, b) => {
@@ -80,18 +101,21 @@ export async function POST(request: Request) {
       return sortableB.localeCompare(sortableA)
     })
     
-    // Get public URLs for the files and extract metadata
+    // Get public URLs for the files and extract ALL metadata
     const filesWithUrls = sortedFiles.map(file => {
       const { data } = supabase
         .storage
         .from('DOT')
         .getPublicUrl(file.name)
       
+      // Extract company name from filename (everything before first __)
+      const companyMatch = file.name.match(/^([^_]+)__/)
+      
       // Extract all metadata from filename
-      const invoiceMatch = file.name.match(/I-(\d+)__/)
+      const invoiceMatch = file.name.match(/I-([^_]+)__/)
       const unitMatch = file.name.match(/U-([^_]+)__/)
       const vinMatch = file.name.match(/V-([^_]+)__/)
-      const plateMatch = file.name.match(/P-([^_]+)/)
+      const plateMatch = file.name.match(/P-([^.]+)/)
       const dateMatch = file.name.match(/D-(\d{8})/)
       const isDot = file.name.includes('__dot__')
       
@@ -105,20 +129,28 @@ export async function POST(request: Request) {
       return {
         name: file.name,
         url: data.publicUrl,
+        company: companyMatch ? companyMatch[1] : 'unknown',
         date: formattedDate,
         invoice: invoiceMatch ? invoiceMatch[1] : 'unknown',
         unit: unitMatch ? unitMatch[1] : 'unknown',
         vin: vinMatch ? vinMatch[1] : 'unknown',
         plate: plateMatch ? plateMatch[1] : 'unknown',
         isDot,
+        documentType: isDot ? 'DOT Inspection' : 'Invoice',
         rawDate: dateMatch ? dateMatch[1] : 'unknown'
       }
     })
     
+    // If admin and duplicates exist, include company info in the response
+    const includeCompanyInfo = isAdmin && filesWithUrls.length > 0;
+    
     return NextResponse.json({ 
       success: true,
       files: filesWithUrls,
-      count: filesWithUrls.length
+      count: filesWithUrls.length,
+      isAdmin,
+      includeCompanyInfo,
+      searchCriteria: searchParams || { unit: unitNumber }
     })
     
   } catch (error) {
