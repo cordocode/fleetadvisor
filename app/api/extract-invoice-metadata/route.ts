@@ -9,11 +9,11 @@ const openai = new OpenAI({
 
 // Suppress the Buffer deprecation warning for this specific module
 const originalEmitWarning = process.emitWarning;
-process.emitWarning = (warning: string | Error, ...args: any[]) => {
+process.emitWarning = (warning: string | Error, ...args: unknown[]) => {
   if (typeof warning === 'string' && warning.includes('Buffer() is deprecated')) {
     return;
   }
-  originalEmitWarning.apply(process, [warning, ...args] as any);
+  originalEmitWarning.apply(process, [warning, ...args] as Parameters<typeof process.emitWarning>);
 };
 
 export async function POST(request: NextRequest) {
