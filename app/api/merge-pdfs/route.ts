@@ -1,20 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { PDFDocument } from 'pdf-lib';
-import sharp from 'sharp';
 import { createClient } from '@supabase/supabase-js';
+
+interface RequestBody {
+  batchId: string;
+  fileUrls: string[];
+  fileName: string;
+  supabaseUrl: string;
+  supabaseKey: string;
+}
 
 export async function POST(request: NextRequest) {
   console.log('=== PDF Merge API Called ===');
   
   try {
-    const body = await request.json();
-    const { batchId, fileUrls, fileName, supabaseUrl, supabaseKey } = body as {
-      batchId: string;
-      fileUrls: string[];
-      fileName: string;
-      supabaseUrl: string;
-      supabaseKey: string;
-    };
+    const body = await request.json() as RequestBody;
+    const { batchId, fileUrls, fileName, supabaseUrl, supabaseKey } = body;
     
     // Initialize Supabase client
     const supabase = createClient(supabaseUrl, supabaseKey);
@@ -34,18 +35,16 @@ export async function POST(request: NextRequest) {
         pages.forEach(page => mergedPdf.addPage(page));
         
       } else if (filename.match(/\.(jpg|jpeg|png)$/)) {
-        let processedBuffer: Buffer;
+        // Embed image directly without optimization
+        const imageBytes = new Uint8Array(bytes);
         
-        if (bytes.byteLength > 500000) {
-          processedBuffer = await sharp(Buffer.from(bytes))
-            .resize(2400, null, { withoutEnlargement: true, fit: 'inside' })
-            .jpeg({ quality: 85, mozjpeg: true })
-            .toBuffer();
+        let image;
+        if (filename.endsWith('.png')) {
+          image = await mergedPdf.embedPng(imageBytes);
         } else {
-          processedBuffer = Buffer.from(bytes);
+          image = await mergedPdf.embedJpg(imageBytes);
         }
         
-        const image = await mergedPdf.embedJpg(new Uint8Array(processedBuffer));
         const page = mergedPdf.addPage();
         const { width, height } = image.scale(1);
         const pageWidth = page.getWidth();
