@@ -9,9 +9,9 @@ const supabase = createClient(
 
 export async function POST(request: Request) {
   try {
-    const { company, unitNumber } = await request.json()
+    const { company, unitNumber, searchParams } = await request.json()
     
-    console.log('Searching for files:', { company, unitNumber })
+    console.log('Searching for files:', { company, unitNumber, searchParams })
     
     // List all files in the DOT bucket
     const { data: files, error } = await supabase
@@ -32,20 +32,40 @@ export async function POST(request: Request) {
     
     console.log('All files in bucket:', files)
     
-    // Filter files for this company and unit
-    // NEW PATTERN: companyname__dot__I-{invoice}__U-{unit}__V-{vin}__D-{date}__P-{plate}.pdf
-    // We only want DOT inspections, so we look for files with __dot__ after company name
+    // Filter files based on search parameters
     const matchingFiles = files?.filter(file => {
-      const dotPattern = `${company}__dot__I-`
-      const unitPattern = `__U-${unitNumber}__`
+      // File must be for this company
+      if (!file.name.startsWith(company)) return false
       
-      // Check if it's a DOT file for this company and has the right unit number
-      return file.name.startsWith(dotPattern) && file.name.includes(unitPattern)
+      // Check if it's a DOT file (has __dot__ after company name)
+      const isDotFile = file.name.includes(`${company}__dot__`)
+      
+      // If searchParams provided, use them; otherwise fall back to unitNumber
+      if (searchParams) {
+        // Build search patterns based on what was provided
+        if (searchParams.unit) {
+          return isDotFile && file.name.includes(`__U-${searchParams.unit}__`)
+        }
+        if (searchParams.invoice) {
+          return file.name.includes(`__I-${searchParams.invoice}__`)
+        }
+        if (searchParams.vin) {
+          return file.name.includes(`__V-${searchParams.vin}__`)
+        }
+        if (searchParams.plate && searchParams.plate !== 'NA') {
+          return file.name.includes(`__P-${searchParams.plate}`)
+        }
+      } else if (unitNumber && unitNumber !== 'NOT_FOUND') {
+        // Backward compatibility: search by unit number for DOT files only
+        return isDotFile && file.name.includes(`__U-${unitNumber}__`)
+      }
+      
+      return false
     }) || []
     
-    console.log('Matching DOT files:', matchingFiles)
+    console.log('Matching files:', matchingFiles)
     
-    // Sort by date (newest first) - date is in filename as D-MMDDYYYY format now
+    // Sort by date (newest first) - date is in filename as D-MMDDYYYY format
     const sortedFiles = matchingFiles.sort((a, b) => {
       // Extract date in D-MMDDYYYY format and convert to sortable format
       const dateA = a.name.match(/D-(\d{8})/)?.[1] || '0'
@@ -67,9 +87,13 @@ export async function POST(request: Request) {
         .from('DOT')
         .getPublicUrl(file.name)
       
-      // Extract invoice number from filename
+      // Extract all metadata from filename
       const invoiceMatch = file.name.match(/I-(\d+)__/)
+      const unitMatch = file.name.match(/U-([^_]+)__/)
+      const vinMatch = file.name.match(/V-([^_]+)__/)
+      const plateMatch = file.name.match(/P-([^_]+)/)
       const dateMatch = file.name.match(/D-(\d{8})/)
+      const isDot = file.name.includes('__dot__')
       
       // Format date from MMDDYYYY to MM/DD/YYYY for display
       let formattedDate = 'unknown'
@@ -83,6 +107,10 @@ export async function POST(request: Request) {
         url: data.publicUrl,
         date: formattedDate,
         invoice: invoiceMatch ? invoiceMatch[1] : 'unknown',
+        unit: unitMatch ? unitMatch[1] : 'unknown',
+        vin: vinMatch ? vinMatch[1] : 'unknown',
+        plate: plateMatch ? plateMatch[1] : 'unknown',
+        isDot,
         rawDate: dateMatch ? dateMatch[1] : 'unknown'
       }
     })
