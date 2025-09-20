@@ -11,11 +11,19 @@ interface ChatMessage {
     url: string;
     name: string;
     date: string;
+    invoice?: string;
+    unit?: string;
+    plate?: string;
+    company?: string;
+    documentType?: string;
   }>;
 }
 
 export default function Dashboard() {
   const [company, setCompany] = useState<string>('')
+  const [companyDisplayName, setCompanyDisplayName] = useState<string>('')
+  const [userId, setUserId] = useState<string>('')
+  const [isAdmin, setIsAdmin] = useState(false)
   const [loading, setLoading] = useState(true)
   const [message, setMessage] = useState('')
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([])
@@ -34,16 +42,20 @@ export default function Dashboard() {
         return
       }
 
+      setUserId(user.id)
+
       try {
         const { data: profile, error: profileError } = await supabase
           .from('profiles')
-          .select('company_id')
+          .select('company_id, is_admin')
           .eq('user_id', user.id)
           .single()
 
         console.log('Profile fetch:', { profile, profileError })
 
         if (profile?.company_id) {
+          setIsAdmin(profile.is_admin || false)
+
           const { data: companyData, error: companyError } = await supabase
             .from('companies')
             .select('name')
@@ -54,6 +66,19 @@ export default function Dashboard() {
 
           if (companyData) {
             setCompany(companyData.name)
+
+            // Format company name for display
+            let displayName = companyData.name
+              .split('-')
+              .map((word: string) => word.charAt(0).toUpperCase() + word.slice(1))
+              .join(' ')
+
+            // Special handling for admin
+            if (companyData.name === 'fleet-advisor-ai-admin') {
+              displayName = 'Fleet Advisor Admin'
+            }
+
+            setCompanyDisplayName(displayName)
           }
         }
       } catch (error) {
@@ -86,13 +111,32 @@ export default function Dashboard() {
 
       const parseData = await parseResponse.json()
 
-      if (!parseData.success || parseData.unitNumber === 'NOT_FOUND') {
+      // Check for ambiguous input
+      if (parseData.searchParams?.ambiguous) {
+        setChatHistory((prev) => [
+          ...prev,
+          {
+            role: 'assistant',
+            content: `I found "${parseData.searchParams.ambiguousValue}" in your request. Could you clarify what this is?\n\nIs this:\n• A unit number? (say "unit ${parseData.searchParams.ambiguousValue}")\n• An invoice number? (say "invoice ${parseData.searchParams.ambiguousValue}")\n• A vehicle plate? (say "plate ${parseData.searchParams.ambiguousValue}")\n• A VIN? (say "VIN ${parseData.searchParams.ambiguousValue}")`,
+          },
+        ])
+        return
+      }
+
+      // Check for no parameters found
+      if (
+        !parseData.success ||
+        (!parseData.searchParams?.unit &&
+          !parseData.searchParams?.invoice &&
+          !parseData.searchParams?.vin &&
+          !parseData.searchParams?.plate)
+      ) {
         setChatHistory((prev) => [
           ...prev,
           {
             role: 'assistant',
             content:
-              'I could not find a unit number in your request. Please specify a unit number, like "unit 112" or "truck 45".',
+              'I could not find any searchable information in your request. Please specify:\n• A unit number (e.g., "unit 112")\n• An invoice number (e.g., "invoice 46270")\n• A VIN number\n• A plate number',
           },
         ])
         return
@@ -104,14 +148,23 @@ export default function Dashboard() {
         body: JSON.stringify({
           company: company,
           unitNumber: parseData.unitNumber,
+          searchParams: parseData.searchParams,
+          userId: userId,
         }),
       })
 
       const retrieveData = await retrieveResponse.json()
 
       if (retrieveData.success && retrieveData.count > 0) {
-        const latestFile = retrieveData.files[0]
-        const responseText = `Found ${retrieveData.count} inspection(s) for Unit ${parseData.unitNumber}.\n\nMost recent inspection: ${latestFile.date}`
+        const searchInfo = parseData.searchParams
+        let searchDescription = ''
+
+        if (searchInfo.unit) searchDescription = `Unit ${searchInfo.unit}`
+        else if (searchInfo.invoice) searchDescription = `Invoice ${searchInfo.invoice}`
+        else if (searchInfo.vin) searchDescription = `VIN ${searchInfo.vin}`
+        else if (searchInfo.plate) searchDescription = `Plate ${searchInfo.plate}`
+
+        const responseText = `Found ${retrieveData.count} file(s) for ${searchDescription}.${retrieveData.count > 1 ? '\n\nShowing all matches:' : ''}`
 
         setChatHistory((prev) => [
           ...prev,
@@ -122,11 +175,19 @@ export default function Dashboard() {
           },
         ])
       } else {
+        const searchInfo = parseData.searchParams
+        let searchDescription = ''
+
+        if (searchInfo.unit) searchDescription = `Unit ${searchInfo.unit}`
+        else if (searchInfo.invoice) searchDescription = `Invoice ${searchInfo.invoice}`
+        else if (searchInfo.vin) searchDescription = `VIN ${searchInfo.vin}`
+        else if (searchInfo.plate) searchDescription = `Plate ${searchInfo.plate}`
+
         setChatHistory((prev) => [
           ...prev,
           {
             role: 'assistant',
-            content: `No inspections found for Unit ${parseData.unitNumber} in ${company}.`,
+            content: `No files found for ${searchDescription}${isAdmin ? ' across all companies' : ` in ${companyDisplayName}`}.`,
           },
         ])
       }
@@ -151,14 +212,16 @@ export default function Dashboard() {
       <div className="border-b">
         <div className="max-w-3xl mx-auto px-4 py-3 flex justify-between items-center">
           <div>
-            <h1 className="text-lg font-semibold">DOT Retrieval</h1>
+            <h1 className="text-lg font-semibold">Fleet Advisor AI</h1>
             {company && (
-              <p className="text-sm text-gray-600">Company: {company}</p>
+              <p className="text-sm text-gray-600">
+                {isAdmin ? 'Admin Access - All Companies' : companyDisplayName}
+              </p>
             )}
           </div>
           <button
             onClick={() => supabase.auth.signOut()}
-            className="text-sm text-gray-600 hover:text-gray-900"
+            className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
           >
             Sign Out
           </button>
@@ -171,9 +234,13 @@ export default function Dashboard() {
           {chatHistory.length === 0 ? (
             <div className="text-center text-gray-500 mt-32">
               <h2 className="text-2xl font-normal mb-2">
-                DOT Inspection Retrieval
+                Welcome, {companyDisplayName}
               </h2>
-              <p>Ask me to find inspection reports.</p>
+              <p>
+                {isAdmin
+                  ? 'Search across all company files'
+                  : 'Search for DOT inspections and invoices'}
+              </p>
             </div>
           ) : (
             <div className="py-8 px-4">
@@ -204,9 +271,25 @@ export default function Dashboard() {
                               <div className="flex items-center justify-between">
                                 <div>
                                   <p className="text-sm font-medium text-blue-900">
-                                    DOT Inspection - {file.date}
+                                    {file.documentType || 'DOT Inspection'} - {file.date}
                                   </p>
                                   <p className="text-xs text-gray-600 mt-1">
+                                    {isAdmin && file.company && (
+                                      <span className="font-medium">
+                                        Company: {file.company} |{' '}
+                                      </span>
+                                    )}
+                                    {file.invoice && (
+                                      <span>Invoice: {file.invoice} | </span>
+                                    )}
+                                    {file.unit && file.unit !== 'NA' && (
+                                      <span>Unit: {file.unit} | </span>
+                                    )}
+                                    {file.plate && file.plate !== 'NA' && (
+                                      <span>Plate: {file.plate}</span>
+                                    )}
+                                  </p>
+                                  <p className="text-xs text-gray-500 mt-1">
                                     {file.name}
                                   </p>
                                 </div>
@@ -239,13 +322,16 @@ export default function Dashboard() {
 
       {/* Input Area */}
       <div className="border-t">
-        <form onSubmit={handleSubmit} className="max-w-3xl mx-auto px-4 py-4">
+        <form
+          onSubmit={handleSubmit}
+          className="max-w-3xl mx-auto px-4 py-4"
+        >
           <div className="relative">
             <input
               type="text"
               value={message}
               onChange={(e) => setMessage(e.target.value)}
-              placeholder="Message DOT Retrieval..."
+              placeholder="What file can I find for you?"
               className="w-full px-4 py-3 pr-12 border border-gray-300 rounded-lg focus:outline-none focus:border-gray-400 resize-none"
               autoFocus
             />
