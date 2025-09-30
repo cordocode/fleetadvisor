@@ -12,14 +12,16 @@ interface ConversationMessage {
   role: 'user' | 'assistant' | 'system'
   content: string
   metadata?: Record<string, unknown>
-  message_metadata?: Record<string, unknown>  // For database compatibility
 }
 
 export async function POST(request: Request) {
   try {
     const { message, conversationId, userId } = await request.json()
     
-    console.log('Admin chat request:', { message, conversationId, userId })
+    console.log('=== ADMIN CHAT REQUEST ===')
+    console.log('Message:', message)
+    console.log('ConversationId:', conversationId)
+    console.log('UserId:', userId)
     
     // Get base URL from request headers (works in Vercel)
     const host = request.headers.get('host') || 'localhost:3000'
@@ -41,6 +43,8 @@ export async function POST(request: Request) {
         { status: 403 }
       )
     }
+    
+    console.log('Admin verified')
     
     // Store user message in database
     await supabase
@@ -67,20 +71,31 @@ export async function POST(request: Request) {
       metadata: msg.message_metadata
     }))
     
+    console.log('Conversation history loaded:', conversationHistory.length, 'messages')
+    
     // Check if this is a confirmation response
     const lastAssistantMessage = conversationHistory
       .filter(m => m.role === 'assistant')
       .pop()
     
-    const isConfirmation = lastAssistantMessage?.message_metadata?.awaitingConfirmation === true
+    if (lastAssistantMessage) {
+      console.log('Last assistant message:', lastAssistantMessage.content.substring(0, 50))
+    }
+    
+    const isConfirmation = lastAssistantMessage?.metadata?.awaitingConfirmation === true
     const isPositiveResponse = /^(yes|y|sure|ok|okay|yep|yeah|confirm|proceed|show them|show all)/i.test(message.trim())
+    
+    console.log('Is confirmation?', isConfirmation)
+    console.log('Is positive response?', isPositiveResponse)
     
     if (isConfirmation && isPositiveResponse) {
       // User confirmed - retrieve and return the files
       console.log('User confirmed - retrieving files')
       
-      const metadata = lastAssistantMessage?.message_metadata || {}
+      const metadata = lastAssistantMessage?.metadata || {}
       const originalSearchParams = metadata.searchParams as Record<string, unknown> | undefined
+      
+      console.log('Original search params:', originalSearchParams)
       
       if (!originalSearchParams) {
         console.error('No search params found in metadata')
@@ -118,6 +133,7 @@ export async function POST(request: Request) {
       )
       
       const retrieveData = await retrieveResponse.json()
+      console.log('Retrieve data:', { success: retrieveData.success, count: retrieveData.count })
       
       if (retrieveData.success) {
         const naturalSummary = (originalSearchParams.naturalLanguageSummary as string) || 'your search'
@@ -147,6 +163,7 @@ export async function POST(request: Request) {
       }
     } else if (isConfirmation && !isPositiveResponse) {
       // User declined - acknowledge
+      console.log('User declined confirmation')
       const responseText = "No problem! Feel free to refine your search or ask me something else."
       
       await supabase
@@ -168,6 +185,7 @@ export async function POST(request: Request) {
     }
     
     // This is a new query - parse it
+    console.log('New query - parsing request')
     const parseResponse = await fetch(
       `${baseUrl}/api/admin/parse-request`,
       {
@@ -178,6 +196,7 @@ export async function POST(request: Request) {
     )
     
     const parseData = await parseResponse.json()
+    console.log('Parse response:', parseData)
     
     if (!parseData.success) {
       const errorResponse = "I had trouble understanding your request. Could you please rephrase it?"
@@ -211,6 +230,9 @@ export async function POST(request: Request) {
       searchParams.plate || 
       searchParams.dateRange
     
+    console.log('Has search criteria?', hasSearchCriteria)
+    console.log('Search params:', searchParams)
+    
     if (!hasSearchCriteria) {
       const errorResponse = "I couldn't find any search criteria. Please specify:\n• A company name\n• A unit number\n• An invoice number\n• A VIN\n• A plate number\n• A date range (e.g., 'last week', 'this month')"
       
@@ -233,6 +255,7 @@ export async function POST(request: Request) {
     }
     
     // Retrieve files based on parsed parameters
+    console.log('Retrieving files with params:', searchParams)
     const retrieveResponse = await fetch(
       `${baseUrl}/api/admin/retrieve-files`,
       {
@@ -246,6 +269,7 @@ export async function POST(request: Request) {
     )
     
     const retrieveData = await retrieveResponse.json()
+    console.log('Retrieve response:', { success: retrieveData.success, count: retrieveData.count })
     
     if (!retrieveData.success) {
       const errorResponse = "I encountered an error searching for files. Please try again."
@@ -269,9 +293,11 @@ export async function POST(request: Request) {
     }
     
     const fileCount = retrieveData.count
+    console.log('File count:', fileCount)
     
     // Check if we need confirmation
     if (fileCount >= CONFIRMATION_THRESHOLD) {
+      console.log('File count exceeds threshold, asking for confirmation')
       const naturalSummary = (searchParams.naturalLanguageSummary as string) || 'your search'
       const confirmationText = `I found ${fileCount} files matching your search:\n\n${naturalSummary}\n\nThis would return ${fileCount} documents. Would you like me to show all of them?`
       
@@ -299,6 +325,7 @@ export async function POST(request: Request) {
     }
     
     // File count is under threshold - return immediately
+    console.log('File count under threshold, returning files')
     const naturalSummary = (searchParams.naturalLanguageSummary as string) || 'your search'
     const responseText = fileCount > 0
       ? `Found ${fileCount} file${fileCount > 1 ? 's' : ''}:\n\n${naturalSummary}`

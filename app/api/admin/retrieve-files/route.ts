@@ -77,7 +77,9 @@ export async function POST(request: Request) {
   try {
     const { searchParams, userId } = await request.json()
     
-    console.log('Admin retrieving files with params:', searchParams)
+    console.log('=== ADMIN RETRIEVE FILES ===')
+    console.log('Search params:', JSON.stringify(searchParams, null, 2))
+    console.log('UserId:', userId)
     
     // Verify user is admin
     const { data: profile } = await supabase
@@ -92,6 +94,8 @@ export async function POST(request: Request) {
         { status: 403 }
       )
     }
+    
+    console.log('Admin verified')
     
     // List all files in DOT bucket (admin sees everything)
     const { data: files, error } = await supabase
@@ -111,15 +115,24 @@ export async function POST(request: Request) {
     }
     
     console.log(`Total files in bucket: ${files?.length || 0}`)
+    if (files && files.length > 0) {
+      console.log('Sample filenames:', files.slice(0, 3).map(f => f.name))
+    }
     
     // Parse date range if provided
     const dateFilter = searchParams.dateRange 
       ? parseDateRange(searchParams.dateRange) 
       : null
     
+    if (dateFilter) {
+      console.log('Date filter:', dateFilter)
+    }
+    
     // Filter files based on all search parameters
     const matchingFiles = files?.filter(file => {
       // Extract metadata from filename
+      // Format: company__I-invoice__U-unit__V-vin__D-MMDDYYYY__P-plate.pdf
+      // Or with DOT: company__I-invoice__U-unit__V-vin__D-MMDDYYYY__dot__P-plate.pdf
       const fileName = file.name
       const companyMatch = fileName.match(/^([^_]+)__/)
       const invoiceMatch = fileName.match(/I-([^_]+)__/)
@@ -185,6 +198,9 @@ export async function POST(request: Request) {
     }) || []
     
     console.log(`Matching files found: ${matchingFiles.length}`)
+    if (matchingFiles.length > 0) {
+      console.log('First matching file:', matchingFiles[0].name)
+    }
     
     // Sort by date (newest first)
     const sortedFiles = matchingFiles.sort((a, b) => {
@@ -237,6 +253,9 @@ export async function POST(request: Request) {
     
     // Gather metadata about the search
     const uniqueCompanies = [...new Set(filesWithUrls.map(f => f.company))]
+    
+    console.log('Unique companies in results:', uniqueCompanies)
+    console.log('Returning', filesWithUrls.length, 'files')
     
     return NextResponse.json({ 
       success: true,
