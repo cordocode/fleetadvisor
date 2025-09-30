@@ -7,7 +7,7 @@ const supabase = createClient(
 )
 
 // Helper function to parse date ranges
-function parseDateRange(dateRange: any): { start: Date; end: Date } | null {
+function parseDateRange(dateRange: string | { start?: string; end?: string; month?: number; year?: number } | null | undefined): { start: Date; end: Date } | null {
   const now = new Date()
   
   if (typeof dateRange === 'string') {
