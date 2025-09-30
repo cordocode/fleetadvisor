@@ -17,6 +17,7 @@ interface ChatMessage {
     company?: string;
     documentType?: string;
   }>;
+  metadata?: any;
 }
 
 export default function Dashboard() {
@@ -27,9 +28,33 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true)
   const [message, setMessage] = useState('')
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([])
+  const [conversationId, setConversationId] = useState<string | null>(null)
+  const [awaitingConfirmation, setAwaitingConfirmation] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
 
   const router = useRouter()
   const supabase = createClientComponentClient()
+
+  // Initialize conversation for admin users
+  const initializeAdminConversation = async (uid: string) => {
+    try {
+      // Create new conversation
+      const response = await fetch('/api/admin/new-conversation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: uid })
+      })
+      
+      const data = await response.json()
+      
+      if (data.success) {
+        setConversationId(data.conversationId)
+        console.log('Created new admin conversation:', data.conversationId)
+      }
+    } catch (error) {
+      console.error('Error initializing admin conversation:', error)
+    }
+  }
 
   useEffect(() => {
     const checkUser = async () => {
@@ -54,7 +79,8 @@ export default function Dashboard() {
         console.log('Profile fetch:', { profile, profileError })
 
         if (profile?.company_id) {
-          setIsAdmin(profile.is_admin || false)
+          const isAdminUser = profile.is_admin || false
+          setIsAdmin(isAdminUser)
 
           const { data: companyData, error: companyError } = await supabase
             .from('companies')
@@ -67,18 +93,21 @@ export default function Dashboard() {
           if (companyData) {
             setCompany(companyData.name)
 
-            // Format company name for display
             let displayName = companyData.name
               .split('-')
               .map((word: string) => word.charAt(0).toUpperCase() + word.slice(1))
               .join(' ')
 
-            // Special handling for admin
             if (companyData.name === 'fleet-advisor-ai-admin') {
               displayName = 'Fleet Advisor Admin'
             }
 
             setCompanyDisplayName(displayName)
+          }
+          
+          // Initialize conversation for admin users
+          if (isAdminUser) {
+            await initializeAdminConversation(user.id)
           }
         }
       } catch (error) {
@@ -91,13 +120,69 @@ export default function Dashboard() {
     checkUser()
   }, [router, supabase])
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleAdminSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!message.trim()) return
+    if (!message.trim() || !conversationId || submitting) return
 
     const userMessage = message
     setChatHistory((prev) => [...prev, { role: 'user', content: userMessage }])
     setMessage('')
+    setSubmitting(true)
+
+    try {
+      const response = await fetch('/api/admin/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: userMessage,
+          conversationId: conversationId,
+          userId: userId
+        })
+      })
+
+      const data = await response.json()
+
+      if (data.success) {
+        setChatHistory((prev) => [
+          ...prev,
+          {
+            role: 'assistant',
+            content: data.response,
+            files: data.files || [],
+            metadata: data
+          }
+        ])
+        
+        // Update confirmation state
+        setAwaitingConfirmation(data.awaitingConfirmation || false)
+      } else {
+        setChatHistory((prev) => [
+          ...prev,
+          {
+            role: 'assistant',
+            content: 'An error occurred. Please try again.'
+          }
+        ])
+      }
+    } catch (error) {
+      console.error('Error in admin chat:', error)
+      setChatHistory((prev) => [
+        ...prev,
+        { role: 'assistant', content: 'An error occurred. Please try again.' }
+      ])
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const handleRegularSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!message.trim() || submitting) return
+
+    const userMessage = message
+    setChatHistory((prev) => [...prev, { role: 'user', content: userMessage }])
+    setMessage('')
+    setSubmitting(true)
 
     try {
       const parseResponse = await fetch('/api/parse-request', {
@@ -111,7 +196,6 @@ export default function Dashboard() {
 
       const parseData = await parseResponse.json()
 
-      // Check for ambiguous input
       if (parseData.searchParams?.ambiguous) {
         setChatHistory((prev) => [
           ...prev,
@@ -120,10 +204,10 @@ export default function Dashboard() {
             content: `I found "${parseData.searchParams.ambiguousValue}" in your request. Could you clarify what this is?\n\nIs this:\n• A unit number? (say "unit ${parseData.searchParams.ambiguousValue}")\n• An invoice number? (say "invoice ${parseData.searchParams.ambiguousValue}")\n• A vehicle plate? (say "plate ${parseData.searchParams.ambiguousValue}")\n• A VIN? (say "VIN ${parseData.searchParams.ambiguousValue}")`,
           },
         ])
+        setSubmitting(false)
         return
       }
 
-      // Check for no parameters found
       if (
         !parseData.success ||
         (!parseData.searchParams?.unit &&
@@ -139,6 +223,7 @@ export default function Dashboard() {
               'I could not find any searchable information in your request. Please specify:\n• A unit number (e.g., "unit 112")\n• An invoice number (e.g., "invoice 46270")\n• A VIN number\n• A plate number',
           },
         ])
+        setSubmitting(false)
         return
       }
 
@@ -187,7 +272,7 @@ export default function Dashboard() {
           ...prev,
           {
             role: 'assistant',
-            content: `No files found for ${searchDescription}${isAdmin ? ' across all companies' : ` in ${companyDisplayName}`}.`,
+            content: `No files found for ${searchDescription} in ${companyDisplayName}.`,
           },
         ])
       }
@@ -197,6 +282,35 @@ export default function Dashboard() {
         ...prev,
         { role: 'assistant', content: 'An error occurred. Please try again.' },
       ])
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const handleSubmit = isAdmin ? handleAdminSubmit : handleRegularSubmit
+
+  const handleNewConversation = async () => {
+    if (!isAdmin) return
+    
+    const confirmed = confirm('Start a new conversation? This will clear your current chat.')
+    if (!confirmed) return
+    
+    try {
+      const response = await fetch('/api/admin/new-conversation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId })
+      })
+      
+      const data = await response.json()
+      
+      if (data.success) {
+        setConversationId(data.conversationId)
+        setChatHistory([])
+        setAwaitingConfirmation(false)
+      }
+    } catch (error) {
+      console.error('Error creating new conversation:', error)
     }
   }
 
@@ -215,19 +329,38 @@ export default function Dashboard() {
             <h1 className="text-lg font-semibold">Fleet Advisor AI</h1>
             {company && (
               <p className="text-sm text-gray-600">
-                {isAdmin ? 'Admin Access - All Companies' : companyDisplayName}
+                {isAdmin ? (
+                  <>
+                    Admin Access - All Companies
+                    <span className="ml-2 text-xs text-blue-600">
+                      (Enhanced AI with Memory)
+                    </span>
+                  </>
+                ) : (
+                  companyDisplayName
+                )}
               </p>
             )}
           </div>
-          <button
-            onClick={async () => {
-              await supabase.auth.signOut()
-              router.push('/auth/login')
-            }}
-            className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-          >
-            Sign Out
-          </button>
+          <div className="flex gap-2">
+            {isAdmin && (
+              <button
+                onClick={handleNewConversation}
+                className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+              >
+                New Chat
+              </button>
+            )}
+            <button
+              onClick={async () => {
+                await supabase.auth.signOut()
+                router.push('/auth/login')
+              }}
+              className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+            >
+              Sign Out
+            </button>
+          </div>
         </div>
       </div>
 
@@ -241,9 +374,19 @@ export default function Dashboard() {
               </h2>
               <p>
                 {isAdmin
-                  ? 'Search across all company files'
+                  ? 'Search across all companies with natural language queries'
                   : 'Search for DOT inspections and invoices'}
               </p>
+              {isAdmin && (
+                <div className="mt-6 text-sm text-gray-400 max-w-md mx-auto">
+                  <p className="font-medium mb-2">Try asking:</p>
+                  <ul className="text-left space-y-1">
+                    <li>• "All Sturgeon DOTs from last week"</li>
+                    <li>• "Show me invoices for unit 112"</li>
+                    <li>• "Rocky Mountain files from September"</li>
+                  </ul>
+                </div>
+              )}
             </div>
           ) : (
             <div className="py-8 px-4">
@@ -318,6 +461,18 @@ export default function Dashboard() {
                   </div>
                 </div>
               ))}
+              {submitting && (
+                <div className="mb-6">
+                  <div className="flex gap-3">
+                    <div className="w-8 h-8 rounded-sm flex-shrink-0 flex items-center justify-center text-white text-sm bg-green-600">
+                      A
+                    </div>
+                    <div className="flex-1 pt-1">
+                      <div className="text-gray-400">Thinking...</div>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -334,15 +489,20 @@ export default function Dashboard() {
               type="text"
               value={message}
               onChange={(e) => setMessage(e.target.value)}
-              placeholder="What file can I find for you?"
+              placeholder={
+                isAdmin
+                  ? "Ask me anything about your fleet files..."
+                  : "What file can I find for you?"
+              }
               className="w-full px-4 py-3 pr-12 border border-gray-300 rounded-lg focus:outline-none focus:border-gray-400 resize-none"
               autoFocus
+              disabled={submitting}
             />
             <button
               type="submit"
-              disabled={!message.trim()}
+              disabled={!message.trim() || submitting}
               className={`absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-md ${
-                message.trim()
+                message.trim() && !submitting
                   ? 'text-gray-900 hover:bg-gray-100'
                   : 'text-gray-300'
               }`}
