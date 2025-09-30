@@ -11,8 +11,8 @@ const CONFIRMATION_THRESHOLD = 10
 interface ConversationMessage {
   role: 'user' | 'assistant' | 'system'
   content: string
-  metadata?: any
-  message_metadata?: any  // For database compatibility
+  metadata?: Record<string, unknown>
+  message_metadata?: Record<string, unknown>  // For database compatibility
 }
 
 export async function POST(request: Request) {
@@ -20,6 +20,13 @@ export async function POST(request: Request) {
     const { message, conversationId, userId } = await request.json()
     
     console.log('Admin chat request:', { message, conversationId, userId })
+    
+    // Get base URL from request headers (works in Vercel)
+    const host = request.headers.get('host') || 'localhost:3000'
+    const protocol = host.includes('localhost') ? 'http' : 'https'
+    const baseUrl = `${protocol}://${host}`
+    
+    console.log('Using base URL:', baseUrl)
     
     // Verify user is admin
     const { data: profile } = await supabase
@@ -65,18 +72,41 @@ export async function POST(request: Request) {
       .filter(m => m.role === 'assistant')
       .pop()
     
-    const isConfirmation = lastAssistantMessage?.message_metadata?.awaitingConfirmation
+    const isConfirmation = lastAssistantMessage?.message_metadata?.awaitingConfirmation === true
     const isPositiveResponse = /^(yes|y|sure|ok|okay|yep|yeah|confirm|proceed|show them|show all)/i.test(message.trim())
     
     if (isConfirmation && isPositiveResponse) {
       // User confirmed - retrieve and return the files
       console.log('User confirmed - retrieving files')
       
-      const originalSearchParams = lastAssistantMessage.message_metadata.searchParams
+      const metadata = lastAssistantMessage?.message_metadata || {}
+      const originalSearchParams = metadata.searchParams as Record<string, unknown> | undefined
+      
+      if (!originalSearchParams) {
+        console.error('No search params found in metadata')
+        const errorResponse = "I couldn't find the original search parameters. Please try your search again."
+        
+        await supabase
+          .from('admin_conversations')
+          .insert({
+            user_id: userId,
+            conversation_id: conversationId,
+            message_role: 'assistant',
+            message_content: errorResponse,
+            message_metadata: { error: true }
+          })
+        
+        return NextResponse.json({
+          success: true,
+          response: errorResponse,
+          files: [],
+          conversationId
+        })
+      }
       
       // Retrieve files
       const retrieveResponse = await fetch(
-        `${process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000'}/api/admin/retrieve-files`,
+        `${baseUrl}/api/admin/retrieve-files`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -90,7 +120,8 @@ export async function POST(request: Request) {
       const retrieveData = await retrieveResponse.json()
       
       if (retrieveData.success) {
-        const responseText = `Here are all ${retrieveData.count} files:\n\n${originalSearchParams.naturalLanguageSummary}`
+        const naturalSummary = (originalSearchParams.naturalLanguageSummary as string) || 'your search'
+        const responseText = `Here are all ${retrieveData.count} files:\n\n${naturalSummary}`
         
         // Store assistant response
         await supabase
@@ -138,7 +169,7 @@ export async function POST(request: Request) {
     
     // This is a new query - parse it
     const parseResponse = await fetch(
-      `${process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000'}/api/admin/parse-request`,
+      `${baseUrl}/api/admin/parse-request`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -203,7 +234,7 @@ export async function POST(request: Request) {
     
     // Retrieve files based on parsed parameters
     const retrieveResponse = await fetch(
-      `${process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000'}/api/admin/retrieve-files`,
+      `${baseUrl}/api/admin/retrieve-files`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -241,7 +272,8 @@ export async function POST(request: Request) {
     
     // Check if we need confirmation
     if (fileCount >= CONFIRMATION_THRESHOLD) {
-      const confirmationText = `I found ${fileCount} files matching your search:\n\n${searchParams.naturalLanguageSummary}\n\nThis would return ${fileCount} documents. Would you like me to show all of them?`
+      const naturalSummary = (searchParams.naturalLanguageSummary as string) || 'your search'
+      const confirmationText = `I found ${fileCount} files matching your search:\n\n${naturalSummary}\n\nThis would return ${fileCount} documents. Would you like me to show all of them?`
       
       await supabase
         .from('admin_conversations')
@@ -267,9 +299,10 @@ export async function POST(request: Request) {
     }
     
     // File count is under threshold - return immediately
+    const naturalSummary = (searchParams.naturalLanguageSummary as string) || 'your search'
     const responseText = fileCount > 0
-      ? `Found ${fileCount} file${fileCount > 1 ? 's' : ''}:\n\n${searchParams.naturalLanguageSummary}`
-      : `No files found matching your search:\n\n${searchParams.naturalLanguageSummary}`
+      ? `Found ${fileCount} file${fileCount > 1 ? 's' : ''}:\n\n${naturalSummary}`
+      : `No files found matching your search:\n\n${naturalSummary}`
     
     await supabase
       .from('admin_conversations')

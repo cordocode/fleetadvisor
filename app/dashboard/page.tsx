@@ -17,7 +17,7 @@ interface ChatMessage {
     company?: string;
     documentType?: string;
   }>;
-  metadata?: any;
+  metadata?: Record<string, unknown>;
 }
 
 export default function Dashboard() {
@@ -29,7 +29,6 @@ export default function Dashboard() {
   const [message, setMessage] = useState('')
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([])
   const [conversationId, setConversationId] = useState<string | null>(null)
-  const [awaitingConfirmation, setAwaitingConfirmation] = useState(false)
   const [submitting, setSubmitting] = useState(false)
 
   const router = useRouter()
@@ -152,9 +151,6 @@ export default function Dashboard() {
             metadata: data
           }
         ])
-        
-        // Update confirmation state
-        setAwaitingConfirmation(data.awaitingConfirmation || false)
       } else {
         setChatHistory((prev) => [
           ...prev,
@@ -307,7 +303,6 @@ export default function Dashboard() {
       if (data.success) {
         setConversationId(data.conversationId)
         setChatHistory([])
-        setAwaitingConfirmation(false)
       }
     } catch (error) {
       console.error('Error creating new conversation:', error)
@@ -381,9 +376,9 @@ export default function Dashboard() {
                 <div className="mt-6 text-sm text-gray-400 max-w-md mx-auto">
                   <p className="font-medium mb-2">Try asking:</p>
                   <ul className="text-left space-y-1">
-                    <li>• "All Sturgeon DOTs from last week"</li>
-                    <li>• "Show me invoices for unit 112"</li>
-                    <li>• "Rocky Mountain files from September"</li>
+                    <li>• &quot;All Sturgeon DOTs from last week&quot;</li>
+                    <li>• &quot;Show me invoices for unit 112&quot;</li>
+                    <li>• &quot;Rocky Mountain files from September&quot;</li>
                   </ul>
                 </div>
               )}
