@@ -18,11 +18,11 @@ process.emitWarning = (warning: string | Error, ...args: unknown[]) => {
 
 export async function POST(request: NextRequest) {
   console.log('=== Extract Invoice Metadata API Called ===');
-  
+
   try {
     const formData = await request.formData();
     const file = formData.get('file') as File | null;
-    
+
     if (!file) {
       return NextResponse.json(
         { success: false, error: 'No file provided' },
@@ -33,7 +33,7 @@ export async function POST(request: NextRequest) {
     // Convert File to Buffer for pdf-parse-fork
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
-    
+
     // Extract text from PDF
     let pdfData;
     try {
@@ -41,17 +41,17 @@ export async function POST(request: NextRequest) {
     } catch (pdfError: unknown) {
       console.error('PDF parsing failed:', pdfError);
       return NextResponse.json(
-        { 
-          success: false, 
+        {
+          success: false,
           error: 'Failed to parse PDF',
           details: pdfError instanceof Error ? pdfError.message : 'Unknown error'
         },
         { status: 500 }
       );
     }
-    
+
     const text = pdfData.text;
-    
+
     // Use OpenAI to extract metadata
     const completion = await openai.chat.completions.create({
       model: "gpt-3.5-turbo",
@@ -60,9 +60,9 @@ export async function POST(request: NextRequest) {
           role: "system",
           content: `Extract vehicle information from invoice text. Return JSON with exactly these keys:
           - unit: The unit number (uppercase, no spaces) or "NA" if not found
-          - vin: The VIN number (17 characters, uppercase, no spaces) or "NA" if not found  
+          - vin: The VIN number (17 characters, uppercase, no spaces) or "NA" if not found
           - plate: The plate/license number (uppercase, no spaces) or "NA" if not found
-          
+
           Remove all whitespace and convert to uppercase. Return ONLY valid JSON.`
         },
         {
@@ -73,18 +73,30 @@ export async function POST(request: NextRequest) {
       temperature: 0,
       response_format: { type: "json_object" }
     });
-    
+
     const metadata = JSON.parse(completion.choices[0].message.content || '{}');
-    
+
+    // Clean up the extracted values
+    const cleanedUnit = (metadata.unit || 'NA').toUpperCase().replace(/\s+/g, '');
+    const cleanedVin = (metadata.vin || 'NA').toUpperCase().replace(/\s+/g, '');
+    const cleanedPlate = (metadata.plate || 'NA').toUpperCase().replace(/\s+/g, '');
+
+    // If unit is NA but VIN exists, use last 8 characters of VIN as unit number
+    let finalUnit = cleanedUnit;
+    if ((cleanedUnit === 'NA' || cleanedUnit === '') && cleanedVin !== 'NA' && cleanedVin.length >= 8) {
+      finalUnit = cleanedVin.slice(-8);
+      console.log('Unit not found, using last 8 of VIN:', finalUnit);
+    }
+
     // Ensure all fields exist and are uppercase with no spaces
     const cleanMetadata = {
-      unit: (metadata.unit || 'NA').toUpperCase().replace(/\s+/g, ''),
-      vin: (metadata.vin || 'NA').toUpperCase().replace(/\s+/g, ''),
-      plate: (metadata.plate || 'NA').toUpperCase().replace(/\s+/g, '')
+      unit: finalUnit,
+      vin: cleanedVin,
+      plate: cleanedPlate
     };
-    
+
     console.log('Extracted metadata:', cleanMetadata);
-    
+
     return NextResponse.json({
       success: true,
       metadata: cleanMetadata
@@ -93,8 +105,8 @@ export async function POST(request: NextRequest) {
   } catch (error: unknown) {
     console.error('Error extracting metadata:', error);
     return NextResponse.json(
-      { 
-        success: false, 
+      {
+        success: false,
         error: 'Failed to extract metadata',
         details: error instanceof Error ? error.message : 'Unknown error'
       },
@@ -105,7 +117,7 @@ export async function POST(request: NextRequest) {
 
 // Health check endpoint
 export async function GET() {
-  return NextResponse.json({ 
+  return NextResponse.json({
     status: 'healthy',
     endpoint: '/api/extract-invoice-metadata',
     method: 'POST',
