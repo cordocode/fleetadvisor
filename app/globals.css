@@ -24,3 +24,19 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Force inputs and textareas to have proper styling regardless of dark mode */
+input[type="text"],
+input[type="email"],
+input[type="password"],
+textarea {
+  background-color: white !important;
+  color: #171717 !important;
+}
+
+input[type="text"]::placeholder,
+input[type="email"]::placeholder,
+input[type="password"]::placeholder,
+textarea::placeholder {
+  color: #6b7280 !important; /* gray-500 */
+}
