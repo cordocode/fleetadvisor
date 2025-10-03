@@ -39,13 +39,13 @@ export async function POST(request: NextRequest) {
 
     // Check if file already exists
     const { data: existingFile } = await supabase.storage
-      .from('Invoice')
+      .from('INVOICE')
       .list('', {
         search: fileName
       });
     
     if (existingFile && existingFile.length > 0) {
-      console.log(`File ${fileName} already exists in Invoice bucket - skipping upload`);
+      console.log(`File ${fileName} already exists in INVOICE bucket - skipping upload`);
       return NextResponse.json({
         success: true,
         fileName: fileName,
@@ -56,7 +56,7 @@ export async function POST(request: NextRequest) {
 
     // Upload to Invoice bucket
     const { error: uploadError } = await supabase.storage
-      .from('Invoice')
+      .from('INVOICE')
       .upload(fileName, fileBytes, {
         contentType: 'application/pdf',
         upsert: false
