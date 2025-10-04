@@ -1,3 +1,4 @@
+// app/auth/login/page.tsx
 'use client';
 
 import { useState, useEffect, Suspense } from 'react';
@@ -19,6 +20,11 @@ function LoginForm() {
     // Check if user just verified their email
     if (searchParams.get('verified') === 'true') {
       setMessage('Email verified successfully! You can now log in.');
+    }
+    
+    // Check for password reset message
+    if (searchParams.get('password_reset') === 'true') {
+      setMessage('Password updated successfully! You can now log in with your new password.');
     }
     
     // Check for any other message (like from signup)
@@ -101,6 +107,15 @@ function LoginForm() {
                 className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-b-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 focus:z-10 sm:text-sm"
                 placeholder="Password"
               />
+            </div>
+          </div>
+
+          {/* Forgot Password Link */}
+          <div className="flex items-center justify-between">
+            <div className="text-sm">
+              <a href="/auth/forgot-password" className="font-medium text-indigo-600 hover:text-indigo-500">
+                Forgot your password?
+              </a>
             </div>
           </div>
 

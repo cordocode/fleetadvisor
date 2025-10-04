@@ -19,17 +19,55 @@ export async function GET(request: NextRequest) {
 
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY! // Use ANON key for auth operations
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
   );
 
-  // Handle email verification
-  if (token_hash && type) {
+  // Handle password recovery
+  if (token_hash && type === 'recovery') {
+    console.log('Attempting password recovery verification...');
+    
+    try {
+      const { data, error } = await supabase.auth.verifyOtp({
+        token_hash,
+        type: 'recovery',
+      });
+
+      console.log('Recovery verification result:', {
+        success: !error,
+        error: error?.message,
+        userData: data?.user?.email
+      });
+
+      if (!error && data?.session) {
+        console.log('Recovery verification successful! Redirecting to reset password page...');
+        
+        // The user is now authenticated with a recovery session
+        // Redirect them to a page where they can set their new password
+        return NextResponse.redirect(
+          new URL('/auth/reset-password', requestUrl.origin)
+        );
+      } else {
+        console.error('Recovery verification failed:', error);
+        return NextResponse.redirect(
+          new URL('/auth/forgot-password?error=invalid_recovery_link&message=' + encodeURIComponent(error?.message || 'Invalid or expired recovery link'), requestUrl.origin)
+        );
+      }
+    } catch (error) {
+      console.error('Unexpected error during recovery:', error);
+      return NextResponse.redirect(
+        new URL('/auth/forgot-password?error=unexpected_error', requestUrl.origin)
+      );
+    }
+  }
+
+  // Handle email verification (signup confirmation)
+  if (token_hash && type && type !== 'recovery') {
     console.log('Attempting email verification...');
     
     try {
       const { data, error } = await supabase.auth.verifyOtp({
         token_hash,
-        type: type as 'signup' | 'recovery' | 'invite' | 'email',
+        type: type as 'signup' | 'invite' | 'email',
       });
 
       console.log('Verification result:', {
