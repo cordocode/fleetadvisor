@@ -1,3 +1,4 @@
+// app/auth/callback/route.ts
 import { createClient } from '@supabase/supabase-js';
 import { NextResponse } from 'next/server';
 import { NextRequest } from 'next/server';
@@ -10,21 +11,30 @@ export async function GET(request: NextRequest) {
   const type = requestUrl.searchParams.get('type');
   const code = requestUrl.searchParams.get('code');
   
-  console.log('Params received:', {
+  console.log('Full URL:', request.url);
+  console.log('All params:', {
     token_hash: token_hash ? `${token_hash.substring(0, 10)}...` : 'none',
-    type,
+    type: type,
     code: code ? 'present' : 'none',
-    fullUrl: request.url
   });
 
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  );
+  // CRITICAL: Check if type is recovery FIRST
+  if (type === 'recovery') {
+    console.log('RECOVERY TYPE DETECTED');
+    
+    if (!token_hash) {
+      console.log('ERROR: No token_hash for recovery');
+      return NextResponse.redirect(
+        new URL('/auth/forgot-password?error=missing_token', requestUrl.origin)
+      );
+    }
 
-  // Handle password recovery
-  if (token_hash && type === 'recovery') {
-    console.log('Attempting password recovery verification...');
+    const supabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+    );
+
+    console.log('Attempting to verify recovery token...');
     
     try {
       const { data, error } = await supabase.auth.verifyOtp({
@@ -32,42 +42,47 @@ export async function GET(request: NextRequest) {
         type: 'recovery',
       });
 
-      console.log('Recovery verification result:', {
-        success: !error,
-        error: error?.message,
-        userData: data?.user?.email
-      });
+      console.log('Recovery verification complete:');
+      console.log('Error:', error);
+      console.log('Data:', data);
 
-      if (!error && data?.session) {
-        console.log('Recovery verification successful! Redirecting to reset password page...');
-        
-        // The user is now authenticated with a recovery session
-        // Redirect them to a page where they can set their new password
+      if (error) {
+        console.error('Recovery failed with error:', error.message);
         return NextResponse.redirect(
-          new URL('/auth/reset-password', requestUrl.origin)
-        );
-      } else {
-        console.error('Recovery verification failed:', error);
-        return NextResponse.redirect(
-          new URL('/auth/forgot-password?error=invalid_recovery_link&message=' + encodeURIComponent(error?.message || 'Invalid or expired recovery link'), requestUrl.origin)
+          new URL(`/auth/forgot-password?error=${encodeURIComponent(error.message)}`, requestUrl.origin)
         );
       }
-    } catch (error) {
-      console.error('Unexpected error during recovery:', error);
+
+      // Success - redirect to reset password page
+      console.log('SUCCESS! Redirecting to reset-password page');
+      return NextResponse.redirect(
+        new URL('/auth/reset-password', requestUrl.origin)
+      );
+      
+    } catch (err) {
+      console.error('Unexpected error during recovery:', err);
       return NextResponse.redirect(
         new URL('/auth/forgot-password?error=unexpected_error', requestUrl.origin)
       );
     }
   }
 
-  // Handle email verification (signup confirmation)
-  if (token_hash && type && type !== 'recovery') {
+  // Handle other types (signup, etc)
+  console.log('NOT a recovery type, handling as:', type);
+  
+  const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  );
+
+  // Rest of your existing code for signup/email verification
+  if (token_hash && type) {
     console.log('Attempting email verification...');
     
     try {
       const { data, error } = await supabase.auth.verifyOtp({
         token_hash,
-        type: type as 'signup' | 'invite' | 'email',
+        type: type as 'signup' | 'recovery' | 'invite' | 'email',
       });
 
       console.log('Verification result:', {
@@ -106,7 +121,7 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  // Handle OAuth code exchange (if using social logins)
+  // Handle OAuth code exchange
   if (code) {
     console.log('Handling OAuth code exchange...');
     try {
@@ -122,6 +137,6 @@ export async function GET(request: NextRequest) {
   }
 
   // If neither token_hash nor code, redirect to login
-  console.log('No token_hash or code found, redirecting to login');
-  return NextResponse.redirect(new URL('/auth/login?error=missing_params', requestUrl.origin));
+  console.log('No valid params found, redirecting to login');
+  return NextResponse.redirect(new URL('/auth/login', requestUrl.origin));
 }
