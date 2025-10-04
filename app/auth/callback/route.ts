@@ -1,5 +1,6 @@
 // app/auth/callback/route.ts
-import { createClient } from '@supabase/supabase-js';
+import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs';
+import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { NextRequest } from 'next/server';
 
@@ -12,29 +13,18 @@ export async function GET(request: NextRequest) {
   const code = requestUrl.searchParams.get('code');
   
   console.log('Full URL:', request.url);
-  console.log('All params:', {
-    token_hash: token_hash ? `${token_hash.substring(0, 10)}...` : 'none',
+  console.log('All params:', { 
+    token_hash: token_hash ? `${token_hash.substring(0, 12)}...` : 'none', 
     type: type,
-    code: code ? 'present' : 'none',
+    code: 'none'
   });
 
-  // CRITICAL: Check if type is recovery FIRST
-  if (type === 'recovery') {
+  // CRITICAL: Use createRouteHandlerClient for proper cookie handling
+  const supabase = createRouteHandlerClient({ cookies });
+
+  // Handle password recovery
+  if (type === 'recovery' && token_hash) {
     console.log('RECOVERY TYPE DETECTED');
-    
-    if (!token_hash) {
-      console.log('ERROR: No token_hash for recovery');
-      return NextResponse.redirect(
-        new URL('/auth/forgot-password?error=missing_token', requestUrl.origin)
-      );
-    }
-
-    const supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-    );
-
-    console.log('Attempting to verify recovery token...');
     
     try {
       const { data, error } = await supabase.auth.verifyOtp({
@@ -44,17 +34,27 @@ export async function GET(request: NextRequest) {
 
       console.log('Recovery verification complete:');
       console.log('Error:', error);
-      console.log('Data:', data);
+      console.log('Has session:', !!data?.session);
+      console.log('Has user:', !!data?.user);
 
       if (error) {
         console.error('Recovery failed with error:', error.message);
+        
+        if (error.message?.includes('expired') || error.code === 'otp_expired') {
+          return NextResponse.redirect(
+            new URL('/auth/forgot-password?error=expired', requestUrl.origin)
+          );
+        }
+        
         return NextResponse.redirect(
           new URL(`/auth/forgot-password?error=${encodeURIComponent(error.message)}`, requestUrl.origin)
         );
       }
 
-      // Success - redirect to reset password page
-      console.log('SUCCESS! Redirecting to reset-password page');
+      // Success - the session should now be set in cookies
+      console.log('SUCCESS! Session created, redirecting to reset-password page');
+      
+      // IMPORTANT: The session is now stored in cookies by createRouteHandlerClient
       return NextResponse.redirect(
         new URL('/auth/reset-password', requestUrl.origin)
       );
@@ -67,22 +67,14 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  // Handle other types (signup, etc)
-  console.log('NOT a recovery type, handling as:', type);
-  
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  );
-
-  // Rest of your existing code for signup/email verification
-  if (token_hash && type) {
-    console.log('Attempting email verification...');
+  // Handle email verification (your existing signup code)
+  if (token_hash && type && type !== 'recovery') {
+    console.log('Attempting email verification with type:', type);
     
     try {
       const { data, error } = await supabase.auth.verifyOtp({
         token_hash,
-        type: type as 'signup' | 'recovery' | 'invite' | 'email',
+        type: type as 'signup' | 'invite' | 'email',
       });
 
       console.log('Verification result:', {
@@ -103,7 +95,6 @@ export async function GET(request: NextRequest) {
         
         console.log('Profile exists:', !!profile);
         
-        // Redirect to login with success message
         return NextResponse.redirect(
           new URL('/auth/login?verified=true', requestUrl.origin)
         );
@@ -136,7 +127,7 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  // If neither token_hash nor code, redirect to login
+  // No valid params found
   console.log('No valid params found, redirecting to login');
   return NextResponse.redirect(new URL('/auth/login', requestUrl.origin));
 }
