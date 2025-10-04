@@ -1,3 +1,4 @@
+// app/auth/reset-password/page.tsx
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -11,64 +12,69 @@ export default function ResetPasswordPage() {
   const [error, setError] = useState<string | null>(null);
   const [checkingSession, setCheckingSession] = useState(true);
   const [userEmail, setUserEmail] = useState<string | null>(null);
-  
+
   const router = useRouter();
   const supabase = createClientComponentClient();
 
   useEffect(() => {
-    // Check if user has a valid recovery session
-    const checkRecoverySession = async () => {
+    const checkSession = async () => {
       try {
-        const { data: { session } } = await supabase.auth.getSession();
-        
-        console.log('Recovery session check:', {
+        const { data: { session }, error } = await supabase.auth.getSession();
+
+        console.log('Reset password page - session check:', {
           hasSession: !!session,
           userEmail: session?.user?.email,
+          error: error,
         });
 
         if (!session) {
-          // No recovery session, redirect to forgot password
-          console.log('No recovery session found, redirecting...');
-          router.push('/auth/forgot-password?error=no_recovery_session');
-          return;
+          const { data: { session: refreshedSession } } = await supabase.auth.refreshSession();
+
+          if (!refreshedSession) {
+            console.log('No session found after refresh, redirecting...');
+            router.push('/auth/forgot-password?error=no_recovery_session');
+            return;
+          }
+
+          setUserEmail(refreshedSession.user.email || null);
+        } else {
+          setUserEmail(session.user.email || null);
         }
 
-        // Store user email for display
-        setUserEmail(session.user.email || null);
         setCheckingSession(false);
       } catch (err) {
-        console.error('Error checking recovery session:', err);
+        console.error('Error checking session:', err);
         router.push('/auth/forgot-password?error=session_error');
       }
     };
 
-    checkRecoverySession();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [router]); // keep dependencies simple to avoid re-runs
+    setTimeout(checkSession, 100);
+  }, [router, supabase]);
 
   const validatePasswords = (): boolean => {
     if (password.length < 6) {
       setError('Password must be at least 6 characters long');
       return false;
     }
+
     if (password !== confirmPassword) {
       setError('Passwords do not match');
       return false;
     }
+
     return true;
   };
 
   const handleResetPassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+
     if (!validatePasswords()) return;
+
     setLoading(true);
 
     try {
-      // Update the user's password
-      const { error: updateError } = await supabase.auth.updateUser({
-        password: password
-      });
+      const { error: updateError } = await supabase.auth.updateUser({ password });
 
       if (updateError) {
         console.error('Password update error:', updateError);
@@ -87,11 +93,10 @@ export default function ResetPasswordPage() {
     }
   };
 
-  // Show loading state while checking session
   if (checkingSession) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-gray-500">Verifying recovery session...</div>
+        <div className="text-gray-500">Loading...</div>
       </div>
     );
   }
@@ -100,16 +105,12 @@ export default function ResetPasswordPage() {
     <div className="min-h-screen flex items-center justify-center bg-gray-50">
       <div className="max-w-md w-full space-y-8">
         <div>
-          <h1 className="text-center text-4xl font-bold text-gray-900 mb-2">
-            Fleet Advisor
-          </h1>
+          <h1 className="text-center text-4xl font-bold text-gray-900 mb-2">Fleet Advisor</h1>
           <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
             Set your new password
           </h2>
           {userEmail && (
-            <p className="mt-2 text-center text-sm text-gray-600">
-              for {userEmail}
-            </p>
+            <p className="mt-2 text-center text-sm text-gray-600">for {userEmail}</p>
           )}
         </div>
 
@@ -127,13 +128,11 @@ export default function ResetPasswordPage() {
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="mt-1 appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 focus:z-10 sm:text-sm"
+                className="mt-1 appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
                 placeholder="Enter new password"
                 minLength={6}
               />
-              <p className="mt-1 text-xs text-gray-500">
-                Must be at least 6 characters
-              </p>
+              <p className="mt-1 text-xs text-gray-500">Must be at least 6 characters</p>
             </div>
 
             <div>
@@ -148,7 +147,7 @@ export default function ResetPasswordPage() {
                 required
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
-                className="mt-1 appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 focus:z-10 sm:text-sm"
+                className="mt-1 appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
                 placeholder="Confirm new password"
                 minLength={6}
               />
