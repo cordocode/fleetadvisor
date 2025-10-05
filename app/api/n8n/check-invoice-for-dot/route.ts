@@ -122,7 +122,7 @@ export async function POST(request: NextRequest) {
 export async function GET() {
   return NextResponse.json({ 
     status: 'healthy',
-    endpoint: '/api/check-invoice-for-dot',
+    endpoint: '/api/n8n/check-invoice-for-dot',
     method: 'POST',
     expects: 'multipart/form-data with file (PDF) and emailBody (string)',
     timestamp: new Date().toISOString()
