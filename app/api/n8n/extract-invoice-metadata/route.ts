@@ -119,7 +119,7 @@ export async function POST(request: NextRequest) {
 export async function GET() {
   return NextResponse.json({
     status: 'healthy',
-    endpoint: '/api/extract-invoice-metadata',
+    endpoint: '/api/n8n/extract-invoice-metadata',
     method: 'POST',
     expects: 'multipart/form-data with file field'
   });
