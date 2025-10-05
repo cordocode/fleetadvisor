@@ -121,7 +121,7 @@ export async function POST(request: Request) {
       
       // Retrieve files
       const retrieveResponse = await fetch(
-        `${baseUrl}/api/admin/retrieve-files`,
+        `${baseUrl}/api/ai/retrieve-files`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -187,7 +187,7 @@ export async function POST(request: Request) {
     // This is a new query - parse it
     console.log('New query - parsing request')
     const parseResponse = await fetch(
-      `${baseUrl}/api/admin/parse-request`,
+      `${baseUrl}/api/ai/parse-request`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -257,7 +257,7 @@ export async function POST(request: Request) {
     // Retrieve files based on parsed parameters
     console.log('Retrieving files with params:', searchParams)
     const retrieveResponse = await fetch(
-      `${baseUrl}/api/admin/retrieve-files`,
+      `${baseUrl}/api/ai/retrieve-files`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

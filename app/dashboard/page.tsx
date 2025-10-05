@@ -5,19 +5,19 @@ import { createClientComponentClient } from '@supabase/auth-helpers-nextjs'
 import { useRouter } from 'next/navigation'
 
 interface ChatMessage {
-  role: string;
-  content: string;
+  role: string
+  content: string
   files?: Array<{
-    url: string;
-    name: string;
-    date: string;
-    invoice?: string;
-    unit?: string;
-    plate?: string;
-    company?: string;
-    documentType?: string;
-  }>;
-  metadata?: Record<string, unknown>;
+    url: string
+    name: string
+    date: string
+    invoice?: string
+    unit?: string
+    plate?: string
+    company?: string
+    documentType?: string
+  }>
+  metadata?: Record<string, unknown>
 }
 
 export default function Dashboard() {
@@ -34,18 +34,16 @@ export default function Dashboard() {
   const router = useRouter()
   const supabase = createClientComponentClient()
 
-  // Initialize conversation for admin users
   const initializeAdminConversation = async (uid: string) => {
     try {
-      // Create new conversation
-      const response = await fetch('/api/admin/new-conversation', {
+      const response = await fetch('/api/ai/new-conversation', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: uid })
+        body: JSON.stringify({ userId: uid }),
       })
-      
+
       const data = await response.json()
-      
+
       if (data.success) {
         setConversationId(data.conversationId)
         console.log('Created new admin conversation:', data.conversationId)
@@ -57,9 +55,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     const checkUser = async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser()
+      const { data: { user } } = await supabase.auth.getUser()
 
       if (!user) {
         router.push('/auth/login')
@@ -103,8 +99,7 @@ export default function Dashboard() {
 
             setCompanyDisplayName(displayName)
           }
-          
-          // Initialize conversation for admin users
+
           if (isAdminUser) {
             await initializeAdminConversation(user.id)
           }
@@ -129,14 +124,14 @@ export default function Dashboard() {
     setSubmitting(true)
 
     try {
-      const response = await fetch('/api/admin/chat', {
+      const response = await fetch('/api/ai/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: userMessage,
-          conversationId: conversationId,
-          userId: userId
-        })
+          conversationId,
+          userId,
+        }),
       })
 
       const data = await response.json()
@@ -148,23 +143,20 @@ export default function Dashboard() {
             role: 'assistant',
             content: data.response,
             files: data.files || [],
-            metadata: data
-          }
+            metadata: data,
+          },
         ])
       } else {
         setChatHistory((prev) => [
           ...prev,
-          {
-            role: 'assistant',
-            content: 'An error occurred. Please try again.'
-          }
+          { role: 'assistant', content: 'An error occurred. Please try again.' },
         ])
       }
     } catch (error) {
       console.error('Error in admin chat:', error)
       setChatHistory((prev) => [
         ...prev,
-        { role: 'assistant', content: 'An error occurred. Please try again.' }
+        { role: 'assistant', content: 'An error occurred. Please try again.' },
       ])
     } finally {
       setSubmitting(false)
@@ -181,13 +173,10 @@ export default function Dashboard() {
     setSubmitting(true)
 
     try {
-      const parseResponse = await fetch('/api/parse-request', {
+      const parseResponse = await fetch('/api/ai/parse-request', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: userMessage,
-          company: company,
-        }),
+        body: JSON.stringify({ message: userMessage, company }),
       })
 
       const parseData = await parseResponse.json()
@@ -223,47 +212,34 @@ export default function Dashboard() {
         return
       }
 
-      const retrieveResponse = await fetch('/api/retrieve-files', {
+      const retrieveResponse = await fetch('/api/ai/retrieve-files', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          company: company,
+          company,
           unitNumber: parseData.unitNumber,
           searchParams: parseData.searchParams,
-          userId: userId,
+          userId,
         }),
       })
 
       const retrieveData = await retrieveResponse.json()
 
+      const searchInfo = parseData.searchParams
+      let searchDescription = ''
+      if (searchInfo.unit) searchDescription = `Unit ${searchInfo.unit}`
+      else if (searchInfo.invoice) searchDescription = `Invoice ${searchInfo.invoice}`
+      else if (searchInfo.vin) searchDescription = `VIN ${searchInfo.vin}`
+      else if (searchInfo.plate) searchDescription = `Plate ${searchInfo.plate}`
+
       if (retrieveData.success && retrieveData.count > 0) {
-        const searchInfo = parseData.searchParams
-        let searchDescription = ''
-
-        if (searchInfo.unit) searchDescription = `Unit ${searchInfo.unit}`
-        else if (searchInfo.invoice) searchDescription = `Invoice ${searchInfo.invoice}`
-        else if (searchInfo.vin) searchDescription = `VIN ${searchInfo.vin}`
-        else if (searchInfo.plate) searchDescription = `Plate ${searchInfo.plate}`
-
         const responseText = `Found ${retrieveData.count} file(s) for ${searchDescription}.${retrieveData.count > 1 ? '\n\nShowing all matches:' : ''}`
 
         setChatHistory((prev) => [
           ...prev,
-          {
-            role: 'assistant',
-            content: responseText,
-            files: retrieveData.files,
-          },
+          { role: 'assistant', content: responseText, files: retrieveData.files },
         ])
       } else {
-        const searchInfo = parseData.searchParams
-        let searchDescription = ''
-
-        if (searchInfo.unit) searchDescription = `Unit ${searchInfo.unit}`
-        else if (searchInfo.invoice) searchDescription = `Invoice ${searchInfo.invoice}`
-        else if (searchInfo.vin) searchDescription = `VIN ${searchInfo.vin}`
-        else if (searchInfo.plate) searchDescription = `Plate ${searchInfo.plate}`
-
         setChatHistory((prev) => [
           ...prev,
           {
@@ -287,19 +263,19 @@ export default function Dashboard() {
 
   const handleNewConversation = async () => {
     if (!isAdmin) return
-    
+
     const confirmed = confirm('Start a new conversation? This will clear your current chat.')
     if (!confirmed) return
-    
+
     try {
-      const response = await fetch('/api/admin/new-conversation', {
+      const response = await fetch('/api/ai/new-conversation', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId })
+        body: JSON.stringify({ userId }),
       })
-      
+
       const data = await response.json()
-      
+
       if (data.success) {
         setConversationId(data.conversationId)
         setChatHistory([])
@@ -310,9 +286,7 @@ export default function Dashboard() {
   }
 
   if (loading) {
-    return (
-      <div className="flex justify-center items-center h-screen">Loading...</div>
-    )
+    return <div className="flex justify-center items-center h-screen">Loading...</div>
   }
 
   return (
@@ -327,9 +301,7 @@ export default function Dashboard() {
                 {isAdmin ? (
                   <>
                     Admin Access - All Companies
-                    <span className="ml-2 text-xs text-blue-600">
-                      (Enhanced AI with Memory)
-                    </span>
+                    <span className="ml-2 text-xs text-blue-600">(Enhanced AI with Memory)</span>
                   </>
                 ) : (
                   companyDisplayName
@@ -341,7 +313,7 @@ export default function Dashboard() {
             {isAdmin && (
               <button
                 onClick={handleNewConversation}
-                className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
               >
                 New Chat
               </button>
@@ -351,7 +323,7 @@ export default function Dashboard() {
                 await supabase.auth.signOut()
                 router.push('/auth/login')
               }}
-              className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+              className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
             >
               Sign Out
             </button>
@@ -364,24 +336,12 @@ export default function Dashboard() {
         <div className="max-w-3xl mx-auto">
           {chatHistory.length === 0 ? (
             <div className="text-center text-gray-500 mt-32">
-              <h2 className="text-2xl font-normal mb-2">
-                Welcome, {companyDisplayName}
-              </h2>
+              <h2 className="text-2xl font-normal mb-2">Welcome, {companyDisplayName}</h2>
               <p>
                 {isAdmin
                   ? 'Search across all companies with natural language queries'
                   : 'Search for DOT inspections and invoices'}
               </p>
-              {isAdmin && (
-                <div className="mt-6 text-sm text-gray-400 max-w-md mx-auto">
-                  <p className="font-medium mb-2">Try asking:</p>
-                  <ul className="text-left space-y-1">
-                    <li>• &quot;All Sturgeon DOTs from last week&quot;</li>
-                    <li>• &quot;Show me invoices for unit 112&quot;</li>
-                    <li>• &quot;Rocky Mountain files from September&quot;</li>
-                  </ul>
-                </div>
-              )}
             </div>
           ) : (
             <div className="py-8 px-4">
@@ -396,9 +356,7 @@ export default function Dashboard() {
                       {msg.role === 'user' ? 'U' : 'A'}
                     </div>
                     <div className="flex-1 pt-1">
-                      <div className="text-gray-900 whitespace-pre-wrap">
-                        {msg.content}
-                      </div>
+                      <div className="text-gray-900 whitespace-pre-wrap">{msg.content}</div>
                       {msg.files && msg.files.length > 0 && (
                         <div className="mt-3 space-y-2">
                           {msg.files.map((file, fileIndex) => (
@@ -420,9 +378,7 @@ export default function Dashboard() {
                                         Company: {file.company} |{' '}
                                       </span>
                                     )}
-                                    {file.invoice && (
-                                      <span>Invoice: {file.invoice} | </span>
-                                    )}
+                                    {file.invoice && <span>Invoice: {file.invoice} | </span>}
                                     {file.unit && file.unit !== 'NA' && (
                                       <span>Unit: {file.unit} | </span>
                                     )}
@@ -430,9 +386,7 @@ export default function Dashboard() {
                                       <span>Plate: {file.plate}</span>
                                     )}
                                   </p>
-                                  <p className="text-xs text-gray-500 mt-1">
-                                    {file.name}
-                                  </p>
+                                  <p className="text-xs text-gray-500 mt-1">{file.name}</p>
                                 </div>
                                 <svg
                                   className="w-5 h-5 text-blue-600"
@@ -475,10 +429,7 @@ export default function Dashboard() {
 
       {/* Input Area */}
       <div className="border-t">
-        <form
-          onSubmit={handleSubmit}
-          className="max-w-3xl mx-auto px-4 py-4"
-        >
+        <form onSubmit={handleSubmit} className="max-w-3xl mx-auto px-4 py-4">
           <div className="relative">
             <input
               type="text"
@@ -486,10 +437,10 @@ export default function Dashboard() {
               onChange={(e) => setMessage(e.target.value)}
               placeholder={
                 isAdmin
-                  ? "Ask me anything about your fleet files..."
-                  : "What file can I find for you?"
+                  ? 'Ask me anything about your fleet files...'
+                  : 'What file can I find for you?'
               }
-              className="w-full px-4 py-3 pr-12 border border-gray-300 rounded-lg focus:outline-none focus:border-gray-400 resize-none"
+              className="w-full px-4 py-3 pr-12 border border-gray-300 rounded-lg focus:outline-none focus:border-gray-400"
               autoFocus
               disabled={submitting}
             />

@@ -46,7 +46,7 @@ export default function SignUpPage() {
 
       if (authData.user) {
         // Create profile linking user to company via API route
-        const profileResponse = await fetch('/api/create-profile', {
+        const profileResponse = await fetch('/auth/create-profile', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
