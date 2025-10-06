@@ -110,7 +110,7 @@ function parseDateRange(dateRange?: string) {
 }
 
 function buildFileUrl(bucket: string, fileName: string) {
-  // Files are stored at the root of the bucket, not in company folders
+  // Files are stored at the root of the bucket
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
   const baseUrl = supabaseUrl.replace('/project', '')
   return `${baseUrl}/storage/v1/object/public/${bucket}/${encodeURIComponent(fileName)}`
@@ -202,11 +202,11 @@ export async function POST(req: Request) {
       )
     }
 
-    // List all files in INVOICE bucket
+    // List all files in INVOICE bucket (files are at root, not in folders)
     const bucket = 'INVOICE'
     const { data: files, error } = await supabase.storage
       .from(bucket)
-      .list('', { limit: 1000 })
+      .list('', { limit: 1000 }) // List files at root
     
     if (error) {
       console.error('Supabase list error:', error)

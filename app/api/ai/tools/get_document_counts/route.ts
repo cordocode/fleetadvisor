@@ -23,6 +23,19 @@ interface Context {
   userId: string
 }
 
+interface DocumentCountResponse {
+  success: boolean
+  count: number
+  docType: string
+  bucket: string
+  exceedsLimit: boolean
+  searchParams: CountParams
+  companyBreakdown?: Record<string, number>
+  companiesFound?: number
+  recommendation?: string
+  suggestions?: string[]
+}
+
 // Parse date range into start and end dates
 function parseDateRange(dateRange: string): { start: Date; end: Date } | null {
   const now = new Date()
@@ -124,7 +137,7 @@ export async function POST(request: Request) {
     // Determine which bucket to check
     const bucket = countParams.docType === 'dot' ? 'DOT' : 'INVOICE'
     
-    // List files in the appropriate bucket
+    // List files in the appropriate bucket (at root)
     const { data: files, error } = await supabase
       .storage
       .from(bucket)
@@ -198,20 +211,7 @@ export async function POST(request: Request) {
     
     console.log(`Found ${matchingCount} matching ${countParams.docType} files`)
     
-    // Prepare response with explicit typing
-    interface DocumentCountResponse {
-      success: boolean
-      count: number
-      docType: string
-      bucket: string
-      exceedsLimit: boolean
-      searchParams: CountParams
-      companyBreakdown?: Record<string, number>
-      companiesFound?: number
-      recommendation?: string
-      suggestions?: string[]
-    }
-    
+    // Build response
     const response: DocumentCountResponse = {
       success: true,
       count: matchingCount,
