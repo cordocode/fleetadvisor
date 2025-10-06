@@ -3,6 +3,26 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import OpenAI from 'openai'
 
+// Helper function to get the correct base URL for API calls
+function getOrigin(): string {
+  // In production, use NEXT_PUBLIC_SITE_URL
+  if (process.env.NEXT_PUBLIC_SITE_URL) {
+    return process.env.NEXT_PUBLIC_SITE_URL
+  }
+  
+  // In development, use localhost
+  if (process.env.NODE_ENV === 'development') {
+    return 'http://localhost:3000'
+  }
+  
+  // Fallback to Vercel URL if available
+  if (process.env.VERCEL_URL) {
+    return `https://${process.env.VERCEL_URL}`
+  }
+  
+  throw new Error('No base URL available for API calls')
+}
+
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
@@ -267,9 +287,8 @@ ${Object.entries(context.resolvedCompanies).map(([display, actual]) =>
 async function executeTool(name: string, args: Record<string, unknown>, context: ConversationContext) {
   console.log(`Executing tool: ${name}`, args)
   
-  // In production, use relative URLs to call the same domain
-  // This ensures it works both locally and when deployed
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || ''
+  // Get the correct base URL for API calls
+  const baseUrl = getOrigin()
   
   try {
     const response = await fetch(`${baseUrl}/api/ai/tools/${name}`, {
