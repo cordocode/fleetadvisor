@@ -110,14 +110,12 @@ function parseDateRange(dateRange?: string) {
 }
 
 function buildFileUrl(bucket: string, fileName: string) {
-  // Files are stored at the root of the bucket
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
   const baseUrl = supabaseUrl.replace('/project', '')
   return `${baseUrl}/storage/v1/object/public/${bucket}/${encodeURIComponent(fileName)}`
 }
 
 function parseFileName(fileName: string) {
-  // Extract metadata from filename
   const companyMatch = fileName.match(/^([^_]+)__/)
   const unitMatch = fileName.match(/__U-([^_]+)/i)
   const vinMatch = fileName.match(/__V-([^_]+)/i)
@@ -136,7 +134,6 @@ function parseFileName(fileName: string) {
 }
 
 function matchesCompany(fileName: string, company: string) {
-  // Company name should be at the start of the filename
   return fileName.toLowerCase().startsWith(company.toLowerCase() + '__')
 }
 
@@ -155,7 +152,6 @@ function matchesUnit(fileName: string, unit?: string) {
 function matchesVin(fileName: string, vin?: string) {
   if (!vin || vin === 'NA') return true
   const metadata = parseFileName(fileName)
-  // Allow partial VIN matching (last 6 chars)
   if (vin.length <= 8) {
     return metadata.vin.toLowerCase().endsWith(vin.toLowerCase())
   }
@@ -202,25 +198,38 @@ export async function POST(req: Request) {
       )
     }
 
-    // List all files in INVOICE bucket (files are at root, not in folders)
+    // Fetch ALL files from INVOICE bucket using pagination
     const bucket = 'INVOICE'
-    const { data: files, error } = await supabase.storage
-      .from(bucket)
-      .list('', { limit: 1000 }) // List files at root
-    
-    if (error) {
-      console.error('Supabase list error:', error)
-      return NextResponse.json(
-        { success: false, error: 'Storage list failed' },
-        { status: 500 }
-      )
+    let allFiles = []
+    let offset = 0
+
+    while (true) {
+      const { data: batch, error } = await supabase.storage
+        .from(bucket)
+        .list('', { limit: 1000, offset })
+      
+      if (error) {
+        console.error('Supabase list error:', error)
+        return NextResponse.json(
+          { success: false, error: 'Storage list failed' },
+          { status: 500 }
+        )
+      }
+      
+      if (!batch || batch.length === 0) break
+      
+      allFiles.push(...batch)
+      if (batch.length < 1000) break
+      offset += 1000
     }
 
+    console.log(`Fetched ${allFiles.length} total files from INVOICE bucket`)
+
     // Filter files that match criteria
-    const matchingFiles = (files || [])
-      .map(f => ({ ...f, name: f.name.trim() })) // Trim any spaces from filenames
+    const matchingFiles = allFiles
+      .map(f => ({ ...f, name: f.name.trim() }))
       .filter(f => f.name.endsWith('.pdf'))
-      .filter(f => !f.name.toLowerCase().includes('__dot__')) // Invoice files should NOT have DOT marker
+      .filter(f => !f.name.toLowerCase().includes('__dot__'))
       .filter(f => matchesCompany(f.name, company))
       .filter(f => matchesInvoice(f.name, invoice))
       .filter(f => matchesUnit(f.name, unit))
@@ -228,11 +237,10 @@ export async function POST(req: Request) {
       .filter(f => matchesPlate(f.name, plate))
       .filter(f => inDateRange(f.name, dateFilter))
 
-    // Sort by date (newest first) - fixed date parsing
+    // Sort by date (newest first)
     matchingFiles.sort((a, b) => {
       const aDate = parseFileName(a.name).date || '00000000'
       const bDate = parseFileName(b.name).date || '00000000'
-      // Convert MMDDYYYY to YYYYMMDD for proper sorting
       const aSort = aDate.length === 8 ? aDate.slice(4,8) + aDate.slice(0,4) : aDate
       const bSort = bDate.length === 8 ? bDate.slice(4,8) + bDate.slice(0,4) : bDate
       return bSort.localeCompare(aSort)
@@ -277,7 +285,6 @@ export async function POST(req: Request) {
       }
     }
 
-    // Add message if truncated
     if (matchingFiles.length > limit) {
       response.metadata.message = `Showing ${limit} of ${matchingFiles.length} matching files. Refine your search to see different results.`
     }

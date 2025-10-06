@@ -35,7 +35,7 @@ const tools: OpenAI.Chat.ChatCompletionTool[] = [
     type: 'function',
     function: {
       name: 'search_dot_files',
-      description: 'Search DOT inspection files in the DOT bucket',
+      description: 'Search DOT inspection files in the DOT bucket. Files are always sorted newest first.',
       parameters: {
         type: 'object',
         properties: {
@@ -43,8 +43,8 @@ const tools: OpenAI.Chat.ChatCompletionTool[] = [
           unit: { type: 'string', description: 'Unit number' },
           vin: { type: 'string', description: 'VIN' },
           plate: { type: 'string', description: 'License plate' },
-          dateRange: { type: 'string', description: 'Date range like last_week, this_month' },
-          limit: { type: 'number', description: 'Max results (default 15)' }
+          dateRange: { type: 'string', description: 'OPTIONAL date range - only use when user specifies a time period. DO NOT use for "latest" or "most recent" requests.' },
+          limit: { type: 'number', description: 'Max results (default 15). Use this for "latest X" requests.' }
         },
         required: ['company']
       }
@@ -54,15 +54,15 @@ const tools: OpenAI.Chat.ChatCompletionTool[] = [
     type: 'function',
     function: {
       name: 'search_invoice_files',
-      description: 'Search invoice files in the INVOICE bucket',
+      description: 'Search invoice files in the INVOICE bucket. Files are always sorted newest first.',
       parameters: {
         type: 'object',
         properties: {
           company: { type: 'string', description: 'Exact company name from resolve_company_name' },
           unit: { type: 'string', description: 'Unit number' },
           invoice: { type: 'string', description: 'Invoice number' },
-          dateRange: { type: 'string', description: 'Date range' },
-          limit: { type: 'number', description: 'Max results (default 15)' }
+          dateRange: { type: 'string', description: 'OPTIONAL date range - only use when user specifies a time period. DO NOT use for "latest" or "most recent" requests.' },
+          limit: { type: 'number', description: 'Max results (default 15). Use this for "latest X" requests.' }
         },
         required: ['company']
       }
@@ -92,7 +92,7 @@ const tools: OpenAI.Chat.ChatCompletionTool[] = [
         properties: {
           docType: { type: 'string', enum: ['dot', 'invoice'], description: 'Document type' },
           company: { type: 'string', description: 'Company name' },
-          dateRange: { type: 'string', description: 'Date range' }
+          dateRange: { type: 'string', description: 'OPTIONAL date range - only use when user specifies a time period' }
         },
         required: ['docType', 'company']
       }
@@ -106,6 +106,7 @@ interface ConversationContext {
   userId: string
   conversationId: string
   totalTokensUsed: number
+  resolvedCompanies: Record<string, string> // Track resolved company names
 }
 
 interface ToolResult {
@@ -148,25 +149,96 @@ FILE STRUCTURE:
 - DOT bucket: company__dot__I-invoice__U-unit__V-vin__D-date__P-plate.pdf
 - INVOICE bucket: company__I-invoice__U-unit__V-vin__D-date__P-plate.pdf (no __dot__ marker)
 
+FILE SEARCH RESPONSE FORMAT:
+When files are found through search tools:
+- Provide a brief summary of what was found
+- Mention key details like count, date range, or invoice numbers if relevant
+- DO NOT include URLs, links, or markdown formatting with [text](url) syntax
+- DO NOT list each file with its URL
+- The UI automatically displays all files as interactive cards below your message
+- Keep your response conversational and focused on the summary
+
+Good response examples:
+- "I found 5 recent invoices for Sturgeon Electric, all from September 29, 2025."
+- "Here are the 3 DOT inspections for unit 123 from last week."
+- "I found invoice 46589 for unit 14010311 from September 29."
+- "Found 5 invoices: 46589-46593, all dated September 29, 2025."
+
+Bad response examples (avoid these):
+- Including any URLs or links in the response
+- Using markdown format like "[Invoice 46589](https://...)"
+- Listing each file with its full URL path
+
+FILE SEARCH RESPONSE FORMAT:
+When files are found through search tools:
+- Provide a brief summary of what was found
+- Mention key details like count, date range, or invoice numbers if relevant
+- DO NOT include URLs, links, or markdown formatting
+- DO NOT list each file with its URL
+- The UI automatically displays all files as interactive cards below your message
+
+Good response examples:
+- "I found 5 recent invoices for Sturgeon Electric, all from September 29, 2025."
+- "Here are the 3 DOT inspections for unit 123 from last week."
+- "I found invoice 46589 for unit 14010311."
+
+Bad response examples (avoid these):
+- Including any URLs or links in the response
+- Using markdown link format like [Invoice 123](url...)
+- Listing each file with its full details and URL
+
+CRITICAL COMPANY NAME HANDLING:
+- When resolve_company_name returns a single match: ALWAYS use the 'name' field (kebab-case format like "herc-rentals")
+- When resolve_company_name returns multiple matches:
+  1. Present the options to the user using their displayName for readability
+  2. Ask them to select by number (1, 2, etc.)
+  3. When they respond, use the corresponding company's 'name' field (NOT displayName)
+- NEVER use displayName in tool calls - only use the exact 'name' field
+- Company names in files are ALWAYS in kebab-case format (e.g., "herc-rentals", "sturgeon-electric")
+- Remember resolved company names for the conversation to avoid re-asking
+
 IMPORTANT WORKFLOW:
 - When a user mentions a company name, first resolve it to the exact name
-- Then use the resolved name for any searches or lookups
-- When searching for "last" or "most recent" files, use limit: 1
+- If you get multiple matches and HIGH confidence (>= 0.8) for ALL of them, still ask for clarification
+- Use the resolved 'name' field (not displayName) for all subsequent tool calls
+- CRITICAL FOR "LATEST/RECENT" REQUESTS:
+  * When user asks for "latest", "most recent", "last X" files - DO NOT add a dateRange parameter
+  * The search tools automatically sort by date (newest first)
+  * Just set the limit parameter to the number requested (e.g., "last 5" → limit: 5)
+  * Let the sorting handle finding the most recent files across ALL dates
+  * Only use dateRange when user specifically mentions a time period (e.g., "from September", "last week")
 - Always complete the full task - don't stop after resolving a company
 - If user just says "files" or "documents", ask which type (DOT or INVOICE)
 
 RESPONSE GUIDELINES:
 - Be conversational and helpful
+- When presenting multiple company matches, format them clearly with numbers
 - Describe results clearly
-- If no files are found, say so clearly
-- If multiple companies match, ask for clarification`
+- If no files are found, say so clearly and suggest adjusting search parameters
+- Always use the exact resolved company name in searches
+- CRITICAL: When files are found, DO NOT include URLs or markdown links in your response
+  * The UI automatically displays files as clickable cards below your message
+  * Just describe what was found (e.g., "I found 5 invoices from September 2025")
+  * You can mention invoice numbers, units, dates but NO URLs
+  * Example good response: "I found 5 recent invoices for Sturgeon Electric from September 29, 2025"
+  * Example bad response: "Here are the files: [Invoice 46589](url...)" 
+
+EXAMPLES OF PROPER HANDLING:
+- "Find the 5 latest invoices for Sturgeon" → search_invoice_files with company:"sturgeon-electric", limit:5 (NO dateRange)
+- "Show me last week's DOT files" → search_dot_files with dateRange:"last_week"
+- "Get the most recent invoice" → search_invoice_files with limit:1 (NO dateRange)
+- "Find September invoices" → search_invoice_files with dateRange:"September 2024" or appropriate date range`
 
   if (!context.isAdmin && context.userCompany) {
     return basePrompt + `\n\nUSER'S COMPANY: ${context.userCompany}
 You can only search within this company's files.`
   }
 
-  return basePrompt + `\n\nADMIN MODE: You have access to all companies' files.`
+  return basePrompt + `\n\nADMIN MODE: You have access to all companies' files.
+
+RESOLVED COMPANIES THIS CONVERSATION:
+${Object.entries(context.resolvedCompanies).map(([display, actual]) => 
+  `- "${display}" → "${actual}"`).join('\n') || 'None yet'}`
 }
 
 // Execute tool calls
@@ -236,7 +308,8 @@ export async function POST(request: Request) {
       userCompany,
       userId,
       conversationId,
-      totalTokensUsed: 0
+      totalTokensUsed: 0,
+      resolvedCompanies: {} // Track resolved companies
     }
     
     console.log('User context:', { 
@@ -269,6 +342,13 @@ export async function POST(request: Request) {
         role: msg.message_role === 'user' ? 'user' as const : 'assistant' as const,
         content: msg.message_content
       }))
+    
+    // Extract previously resolved companies from history
+    history?.forEach(msg => {
+      if (msg.message_metadata?.resolvedCompanies) {
+        Object.assign(context.resolvedCompanies, msg.message_metadata.resolvedCompanies)
+      }
+    })
     
     // Build initial messages for OpenAI - mutable array
     const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
@@ -337,6 +417,15 @@ export async function POST(request: Request) {
         // Execute the tool
         const result = await executeTool(functionName, functionArgs, context)
         
+        // Track resolved company names
+        if (functionName === 'resolve_company_name' && result.matches) {
+          result.matches.forEach((match: any) => {
+            if (match.name && match.displayName) {
+              context.resolvedCompanies[match.displayName] = match.name
+            }
+          })
+        }
+        
         // Store for later
         allToolResults.push({
           tool: functionName,
@@ -385,7 +474,7 @@ export async function POST(request: Request) {
         return res.files
       })
     
-    // Store assistant response
+    // Store assistant response with resolved companies
     await supabase
       .from('admin_conversations')
       .insert({
@@ -399,7 +488,8 @@ export async function POST(request: Request) {
             args: tr.args
           })),
           files,
-          tokensUsed: context.totalTokensUsed
+          tokensUsed: context.totalTokensUsed,
+          resolvedCompanies: context.resolvedCompanies
         }
       })
     

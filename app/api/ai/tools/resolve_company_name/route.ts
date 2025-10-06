@@ -159,22 +159,54 @@ export async function POST(request: Request) {
     // Sort by confidence
     scored.sort((a, b) => b.confidence - a.confidence)
     
+    // Remove duplicates based on company name (keep highest confidence)
+    const uniqueScored = scored.reduce((acc: CompanyMatch[], current) => {
+      const existing = acc.find(item => item.name === current.name)
+      if (!existing) {
+        acc.push(current)
+      }
+      return acc
+    }, [])
+    
     // Apply confidence thresholds
-    const SINGLE_MATCH_THRESHOLD = 0.8
+    const PERFECT_MATCH_THRESHOLD = 1.0
+    const SINGLE_MATCH_THRESHOLD = 0.85
     const MULTIPLE_MATCH_THRESHOLD = 0.6
     
-    // Check for single high-confidence match
-    const highConfidenceMatches = scored.filter(s => s.confidence >= SINGLE_MATCH_THRESHOLD)
-    const mediumConfidenceMatches = scored.filter(s => s.confidence >= MULTIPLE_MATCH_THRESHOLD)
+    // Check for perfect match (exactly 1.0 confidence)
+    const perfectMatches = uniqueScored.filter(s => s.confidence === PERFECT_MATCH_THRESHOLD)
+    const highConfidenceMatches = uniqueScored.filter(s => s.confidence >= SINGLE_MATCH_THRESHOLD)
+    const mediumConfidenceMatches = uniqueScored.filter(s => s.confidence >= MULTIPLE_MATCH_THRESHOLD)
     
     console.log('Scoring results:', {
       totalCompanies: companies.length,
+      uniqueCompanies: uniqueScored.length,
+      perfectMatches: perfectMatches.length,
       highConfidence: highConfidenceMatches.length,
       mediumConfidence: mediumConfidenceMatches.length,
-      topMatch: scored[0]
+      topMatch: uniqueScored[0]
     })
     
-    // Decision logic
+    // Decision logic - improved to handle perfect matches better
+    if (perfectMatches.length === 1) {
+      // Single perfect match - use it automatically
+      console.log('Single perfect match found')
+      return NextResponse.json({
+        matchType: 'single',
+        matches: [perfectMatches[0]]
+      })
+    }
+    
+    if (perfectMatches.length > 1) {
+      // Multiple perfect matches (likely duplicates or very similar names)
+      // Still need clarification but these are the most likely
+      console.log(`Found ${perfectMatches.length} perfect matches, need clarification`)
+      return NextResponse.json({
+        matchType: 'multiple',
+        matches: perfectMatches
+      })
+    }
+    
     if (highConfidenceMatches.length === 1) {
       // Single high-confidence match - proceed automatically
       console.log('Single high-confidence match found')
@@ -197,7 +229,7 @@ export async function POST(request: Request) {
     console.log('No matches found above threshold')
     
     // Suggest top 3 companies as alternatives
-    const suggestions = scored.slice(0, 3).filter(s => s.confidence > 0.3)
+    const suggestions = uniqueScored.slice(0, 3).filter(s => s.confidence > 0.3)
     
     return NextResponse.json({
       matchType: 'none',
