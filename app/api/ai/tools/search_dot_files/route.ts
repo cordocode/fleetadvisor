@@ -110,14 +110,12 @@ function parseDateRange(dateRange?: string) {
 }
 
 function buildFileUrl(bucket: string, fileName: string) {
-  // Files are stored at the root of the bucket
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
   const baseUrl = supabaseUrl.replace('/project', '')
   return `${baseUrl}/storage/v1/object/public/${bucket}/${encodeURIComponent(fileName)}`
 }
 
 function parseFileName(fileName: string) {
-  // Extract metadata from filename
   const companyMatch = fileName.match(/^([^_]+)__/)
   const unitMatch = fileName.match(/__U-([^_]+)/i)
   const vinMatch = fileName.match(/__V-([^_]+)/i)
@@ -136,7 +134,6 @@ function parseFileName(fileName: string) {
 }
 
 function matchesCompany(fileName: string, company: string) {
-  // Company name should be at the start of the filename
   return fileName.toLowerCase().startsWith(company.toLowerCase() + '__')
 }
 
@@ -149,7 +146,6 @@ function matchesUnit(fileName: string, unit?: string) {
 function matchesVin(fileName: string, vin?: string) {
   if (!vin || vin === 'NA') return true
   const metadata = parseFileName(fileName)
-  // Allow partial VIN matching (last 6 chars)
   if (vin.length <= 8) {
     return metadata.vin.toLowerCase().endsWith(vin.toLowerCase())
   }
@@ -166,13 +162,19 @@ function inDateRange(fileName: string, range: { start: Date, end: Date } | null)
   if (!range) return true
   
   const metadata = parseFileName(fileName)
-  if (!metadata.date || metadata.date.length !== 8) return true
+  
+  // CRITICAL: If date filter is specified but file has no date, EXCLUDE it
+  if (!metadata.date || metadata.date.length !== 8) {
+    return false
+  }
   
   const year = parseInt(metadata.date.substring(4, 8))
   const month = parseInt(metadata.date.substring(0, 2))
   const day = parseInt(metadata.date.substring(2, 4))
   
-  if (month < 1 || month > 12 || day < 1 || day > 31) return true
+  if (month < 1 || month > 12 || day < 1 || day > 31) {
+    return false
+  }
   
   const fileDate = new Date(year, month - 1, day)
   return fileDate >= range.start && fileDate <= range.end
@@ -196,11 +198,10 @@ export async function POST(req: Request) {
       )
     }
 
-    // List all files in DOT bucket (files are at root, not in folders)
     const bucket = 'DOT'
     const { data: files, error } = await supabase.storage
       .from(bucket)
-      .list('', { limit: 10000 }) // Set high limit to get all files
+      .list('', { limit: 10000 })
     
     if (error) {
       console.error('Supabase list error:', error)
@@ -212,31 +213,26 @@ export async function POST(req: Request) {
 
     console.log(`Fetched ${files?.length || 0} total files from ${bucket} bucket`)
 
-    // Filter files that match criteria
     const matchingFiles = (files || [])
-      .map(f => ({ ...f, name: f.name.trim() })) // Trim any spaces from filenames
+      .map(f => ({ ...f, name: f.name.trim() }))
       .filter(f => f.name.endsWith('.pdf'))
-      .filter(f => f.name.toLowerCase().includes('__dot__')) // Must have DOT marker
+      .filter(f => f.name.toLowerCase().includes('__dot__'))
       .filter(f => matchesCompany(f.name, company))
       .filter(f => matchesUnit(f.name, unit))
       .filter(f => matchesVin(f.name, vin))
       .filter(f => matchesPlate(f.name, plate))
       .filter(f => inDateRange(f.name, dateFilter))
 
-    // Sort by date (newest first) - fixed date parsing
     matchingFiles.sort((a, b) => {
       const aDate = parseFileName(a.name).date || '00000000'
       const bDate = parseFileName(b.name).date || '00000000'
-      // Convert MMDDYYYY to YYYYMMDD for proper sorting
       const aSort = aDate.length === 8 ? aDate.slice(4,8) + aDate.slice(0,4) : aDate
       const bSort = bDate.length === 8 ? bDate.slice(4,8) + bDate.slice(0,4) : bDate
       return bSort.localeCompare(aSort)
     })
 
-    // Limit results
     const sliced = matchingFiles.slice(0, limit)
 
-    // Build response with proper URLs
     const filesWithUrls: FileResult[] = sliced.map(f => {
       const metadata = parseFileName(f.name)
       const url = buildFileUrl(bucket, f.name)
@@ -271,7 +267,6 @@ export async function POST(req: Request) {
       }
     }
 
-    // Add message if truncated
     if (matchingFiles.length > limit) {
       response.metadata.message = `Showing ${limit} of ${matchingFiles.length} matching files. Refine your search to see different results.`
     }
