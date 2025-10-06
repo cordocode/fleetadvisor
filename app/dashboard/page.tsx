@@ -20,8 +20,6 @@ interface ChatMessage {
     documentType?: string
     bucket?: string
   }>
-  toolsUsed?: string[]
-  metadata?: Record<string, unknown>
 }
 
 export default function Dashboard() {
@@ -168,8 +166,7 @@ export default function Dashboard() {
           {
             role: 'assistant',
             content: data.response,
-            files: data.files || [],
-            toolsUsed: data.toolsUsed || [],
+            files: data.files || []
           },
         ])
       } else {
@@ -324,7 +321,7 @@ export default function Dashboard() {
                       className={`rounded-lg px-4 py-3 ${
                         msg.role === 'user'
                           ? 'bg-blue-600 text-white'
-                          : 'bg-white border border-gray-200'
+                          : 'bg-white border border-gray-200 text-gray-900'
                       }`}
                     >
                       <div className="whitespace-pre-wrap">{msg.content}</div>
@@ -332,7 +329,7 @@ export default function Dashboard() {
                       {/* File Results */}
                       {msg.files && msg.files.length > 0 && (
                         <div className="mt-4 space-y-2">
-                          <p className="text-sm font-medium mb-2">
+                          <p className={`text-sm font-medium mb-2 ${msg.role === 'user' ? 'text-white' : 'text-gray-900'}`}>
                             Found {msg.files.length} file{msg.files.length > 1 ? 's' : ''}:
                           </p>
                           {msg.files.map((file, fileIndex) => (
@@ -393,13 +390,6 @@ export default function Dashboard() {
                         </div>
                       )}
                     </div>
-
-                    {/* Tool usage indicator */}
-                    {msg.toolsUsed && msg.toolsUsed.length > 0 && (
-                      <div className="mt-1 text-xs text-gray-500">
-                        Used: {msg.toolsUsed.join(', ')}
-                      </div>
-                    )}
                   </div>
                   {msg.role === 'user' && (
                     <div className="w-8 h-8 rounded-full bg-gray-600 flex items-center justify-center text-white text-sm font-medium flex-shrink-0 order-2">
@@ -428,7 +418,7 @@ export default function Dashboard() {
                           style={{ animationDelay: '0.2s' }}
                         />
                       </div>
-                      <span className="text-sm text-gray-500">Thinking...</span>
+                      <span className="text-sm text-gray-500">Searching...</span>
                     </div>
                   </div>
                 </div>
@@ -467,11 +457,6 @@ export default function Dashboard() {
               Send
             </button>
           </div>
-          {isAdmin && (
-            <p className="mt-2 text-xs text-gray-500 text-center">
-              Conversation ID: {conversationId}
-            </p>
-          )}
         </form>
       </div>
     </div>

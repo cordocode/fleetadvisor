@@ -106,11 +106,12 @@ interface ConversationContext {
   userId: string
   conversationId: string
   totalTokensUsed: number
-  lastResolvedCompany: {
-    userInput: string
-    resolvedName: string
-    messageIndex: number
-  } | null
+}
+
+interface ToolResult {
+  tool: string
+  args: Record<string, any>
+  result: any
 }
 
 // Get system prompt based on user role
@@ -138,27 +139,31 @@ FILE STRUCTURE:
 - DOT bucket: company__dot__I-invoice__U-unit__V-vin__D-date__P-plate.pdf
 - INVOICE bucket: company__I-invoice__U-unit__V-vin__D-date__P-plate.pdf (no __dot__ marker)
 
-CRITICAL RULES:
-- ALWAYS call resolve_company_name before any search involving companies
-- Never return more than 15 documents per search
-- If user just says "files" or "documents", ask which bucket (DOT or INVOICE)
-- Track token usage (limit: 100,000 tokens)
-- For ambiguous references like "their" or "that company", use conversation context`
+IMPORTANT WORKFLOW:
+- When a user mentions a company name, first resolve it to the exact name
+- Then use the resolved name for any searches or lookups
+- When searching for "last" or "most recent" files, use limit: 1
+- Always complete the full task - don't stop after resolving a company
+- If user just says "files" or "documents", ask which type (DOT or INVOICE)
+
+RESPONSE GUIDELINES:
+- Be conversational and helpful
+- Describe results clearly
+- If no files are found, say so clearly
+- If multiple companies match, ask for clarification`
 
   if (!context.isAdmin && context.userCompany) {
     return basePrompt + `\n\nUSER'S COMPANY: ${context.userCompany}
 You can only search within this company's files.`
   }
 
-  return basePrompt + `\n\nADMIN MODE: You have access to all companies' files.
-When searching, always clarify which company if not specified.`
+  return basePrompt + `\n\nADMIN MODE: You have access to all companies' files.`
 }
 
 // Execute tool calls
-async function executeTool(name: string, args: Record<string, unknown>, context: ConversationContext) {
+async function executeTool(name: string, args: Record<string, any>, context: ConversationContext) {
   console.log(`Executing tool: ${name}`, args)
   
-  // Get base URL from environment or use default
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
   
   try {
@@ -222,8 +227,7 @@ export async function POST(request: Request) {
       userCompany,
       userId,
       conversationId,
-      totalTokensUsed: 0,
-      lastResolvedCompany: null
+      totalTokensUsed: 0
     }
     
     console.log('User context:', { 
@@ -257,110 +261,108 @@ export async function POST(request: Request) {
         content: msg.message_content
       }))
     
-    // Build messages for OpenAI
-    const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+    // Build initial messages for OpenAI
+    let messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
       { role: 'system', content: getSystemPrompt(context) },
       ...conversationHistory
     ]
     
-    // Call OpenAI with tools
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o',
-      messages,
-      tools,
-      tool_choice: 'auto',
-      temperature: 0.3
-    })
+    // Keep track of all tool results for final extraction
+    const allToolResults: ToolResult[] = []
+    let finalResponse = ''
+    let maxIterations = 5 // Prevent infinite loops
+    let iteration = 0
     
-    const responseMessage = completion.choices[0].message
-    const toolCalls = responseMessage.tool_calls || []
-    
-    // Execute any tool calls
-    const toolResults = []
-    for (const toolCall of toolCalls) {
-      // Handle different tool call types from OpenAI
-      let functionName: string = ''
-      let functionArgs: Record<string, unknown> = {}
+    // Main loop to handle tool calls
+    while (iteration < maxIterations) {
+      iteration++
       
-      // Use type assertion with known OpenAI structure
-      const call = toolCall as { 
-        type?: string
-        function?: { 
-          name: string
-          arguments: string 
-        }
-      }
-      
-      if (call.function?.name) {
-        functionName = call.function.name
-        try {
-          functionArgs = JSON.parse(call.function.arguments)
-        } catch (e) {
-          console.error('Error parsing function arguments:', e)
-          continue
-        }
-      } else {
-        console.error('Invalid tool call structure:', toolCall)
-        continue
-      }
-      
-      if (!functionName) {
-        continue
-      }
-      
-      const result = await executeTool(functionName, functionArgs, context)
-      
-      toolResults.push({
-        tool: functionName,
-        args: functionArgs,
-        result
-      })
-      
-      // Update context if company was resolved
-      if (functionName === 'resolve_company_name' && result.matchType === 'single') {
-        const userInput = functionArgs.userInput
-        if (typeof userInput === 'string' && result.matches && result.matches[0]) {
-          context.lastResolvedCompany = {
-            userInput: userInput,
-            resolvedName: result.matches[0].name,
-            messageIndex: messages.length
-          }
-        }
-      }
-    }
-    
-    // Generate final response
-    let finalResponse = responseMessage.content || ''
-    
-    // If tools were called, append results to context and get final response
-    if (toolResults.length > 0) {
-      const toolResultsMessage = toolResults.map(tr => 
-        `Tool ${tr.tool} returned: ${JSON.stringify(tr.result)}`
-      ).join('\n')
-      
-      const followUpMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-        ...messages,
-        { 
-          role: 'assistant', 
-          content: responseMessage.content || ''
-        },
-        { 
-          role: 'system',
-          content: `Tool results:\n${toolResultsMessage}\n\nNow provide a helpful response to the user based on these results.`
-        }
-      ]
-      
-      const followUpCompletion = await openai.chat.completions.create({
+      // Call OpenAI
+      const completion = await openai.chat.completions.create({
         model: 'gpt-4o',
-        messages: followUpMessages,
+        messages,
+        tools,
+        tool_choice: 'auto',
         temperature: 0.3
       })
       
-      finalResponse = followUpCompletion.choices[0].message.content || ''
+      const responseMessage = completion.choices[0].message
+      
+      // If no tool calls, we have our final response
+      if (!responseMessage.tool_calls || responseMessage.tool_calls.length === 0) {
+        finalResponse = responseMessage.content || ''
+        if (iteration === 1) {
+          // First iteration with no tools means tracking token usage
+          context.totalTokensUsed += completion.usage?.total_tokens || 0
+        }
+        break
+      }
+      
+      // Execute tool calls
+      const toolMessages: OpenAI.Chat.ChatCompletionToolMessageParam[] = []
+      
+      for (const toolCall of responseMessage.tool_calls) {
+        // Handle the union type properly
+        const functionCall = toolCall as OpenAI.Chat.ChatCompletionMessageToolCall & {
+          function: { name: string; arguments: string }
+        }
+        
+        if (!functionCall.function) {
+          console.error('Invalid tool call structure:', toolCall)
+          continue
+        }
+        
+        const functionName = functionCall.function.name
+        let functionArgs: Record<string, any> = {}
+        
+        try {
+          functionArgs = JSON.parse(functionCall.function.arguments)
+        } catch (e) {
+          console.error('Error parsing function arguments:', e)
+          toolMessages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: JSON.stringify({ error: 'Failed to parse arguments' })
+          })
+          continue
+        }
+        
+        // Execute the tool
+        const result = await executeTool(functionName, functionArgs, context)
+        
+        // Store for later
+        allToolResults.push({
+          tool: functionName,
+          args: functionArgs,
+          result
+        })
+        
+        // Add tool response message
+        toolMessages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: JSON.stringify(result)
+        })
+      }
+      
+      // Add assistant message with tool calls and tool responses to messages
+      messages.push({
+        role: 'assistant',
+        content: responseMessage.content || null,
+        tool_calls: responseMessage.tool_calls.map(tc => ({
+          id: tc.id,
+          type: 'function' as const,
+          function: (tc as any).function
+        }))
+      })
+      messages.push(...toolMessages)
+      
+      // Update token usage
+      context.totalTokensUsed += completion.usage?.total_tokens || 0
     }
     
-    // Extract any files from tool results
-    const files = toolResults
+    // Extract files from all tool results
+    const files = allToolResults
       .filter(tr => tr.result.files)
       .flatMap(tr => tr.result.files)
     
@@ -373,10 +375,12 @@ export async function POST(request: Request) {
         message_role: 'assistant',
         message_content: finalResponse,
         message_metadata: {
-          toolCalls: toolResults,
+          toolCalls: allToolResults.map(tr => ({
+            tool: tr.tool,
+            args: tr.args
+          })),
           files,
-          tokensUsed: completion.usage?.total_tokens || 0,
-          lastResolvedCompany: context.lastResolvedCompany
+          tokensUsed: context.totalTokensUsed
         }
       })
     
@@ -384,8 +388,7 @@ export async function POST(request: Request) {
       success: true,
       response: finalResponse,
       files,
-      conversationId,
-      toolsUsed: toolResults.map(tr => tr.tool)
+      conversationId
     })
     
   } catch (error) {
