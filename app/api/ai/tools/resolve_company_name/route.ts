@@ -1,247 +1,101 @@
-// app/api/ai/tools/resolve_company_name/route.ts
-import { NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+// tools/resolve_company_name.ts
+// FULL DROP-IN REPLACEMENT with robust origin resolution + logging.
+// Works both locally and on Vercel/custom domain (NEXT_PUBLIC_SITE_URL).
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
-
-// Calculate Levenshtein distance for fuzzy matching
-function levenshteinDistance(str1: string, str2: string): number {
-  const matrix = []
-  
-  for (let i = 0; i <= str2.length; i++) {
-    matrix[i] = [i]
+type ResolveCompanyArgs = {
+  userInput: string
+  context?: {
+    isAdmin?: boolean
+    userCompany?: string
+    [k: string]: unknown
   }
-  
-  for (let j = 0; j <= str1.length; j++) {
-    matrix[0][j] = j
-  }
-  
-  for (let i = 1; i <= str2.length; i++) {
-    for (let j = 1; j <= str1.length; j++) {
-      if (str2.charAt(i - 1) === str1.charAt(j - 1)) {
-        matrix[i][j] = matrix[i - 1][j - 1]
-      } else {
-        matrix[i][j] = Math.min(
-          matrix[i - 1][j - 1] + 1,
-          matrix[i][j - 1] + 1,
-          matrix[i - 1][j] + 1
-        )
-      }
-    }
-  }
-  
-  return matrix[str2.length][str1.length]
 }
 
-// Normalize string for matching
-function normalize(str: string): string {
-  return str.toLowerCase().replace(/[^a-z0-9]/g, '')
+type Match = {
+  name: string
+  displayName: string
+  confidence: number
 }
 
-// Calculate match confidence score
-function calculateMatchScore(input: string, companyName: string): number {
-  const normalizedInput = normalize(input)
-  const normalizedCompany = normalize(companyName)
-  
-  // Exact match
-  if (normalizedCompany === normalizedInput) {
-    return 1.0
+type ResolveCompanyResponse =
+  | {
+      matchType: 'single' | 'multiple' | 'restricted' | 'none'
+      matches: Match[]
+      suggestions?: Match[]
+      message?: string
+      success?: boolean
+      error?: string
+    }
+  | { success: false; error: string }
+
+/**
+ * Normalize a site URL: ensure it has protocol, strip trailing slash.
+ */
+function normalizeSiteUrl(raw?: string | null): string | null {
+  if (!raw) return null
+  let s = raw.trim()
+  if (!s) return null
+  if (!/^https?:\/\//i.test(s)) {
+    // If someone set it without protocol, assume https in prod
+    s = `https://${s}`
   }
-  
-  // Company starts with input
-  if (normalizedCompany.startsWith(normalizedInput)) {
-    return 0.9
-  }
-  
-  // Company contains input
-  if (normalizedCompany.includes(normalizedInput)) {
-    return 0.7
-  }
-  
-  // Input contains company (for cases like "sturgeon electric" matching "sturgeon")
-  if (normalizedInput.includes(normalizedCompany)) {
-    return 0.75
-  }
-  
-  // Fuzzy match using Levenshtein distance
-  const distance = levenshteinDistance(normalizedInput, normalizedCompany)
-  const maxLength = Math.max(normalizedInput.length, normalizedCompany.length)
-  const similarity = 1 - (distance / maxLength)
-  
-  return Math.max(0, similarity)
+  return s.replace(/\/$/, '')
 }
 
-// Convert kebab-case to display name
-function toDisplayName(companyName: string): string {
-  // Special cases
-  if (companyName === 'fleet-advisor-ai-admin') {
-    return 'Fleet Advisor Admin'
+/**
+ * Resolve the correct origin for server-side fetches.
+ * Priority:
+ * 1) NEXT_PUBLIC_SITE_URL (you set this to https://fleetadvisor.ai)
+ * 2) VERCEL_URL (preview/prod host provided by Vercel)
+ * 3) NEXT_PUBLIC_VERCEL_URL (sometimes folks use this)
+ * 4) Local fallback
+ */
+function getOrigin(): string {
+  const fromExplicit = normalizeSiteUrl(process.env.NEXT_PUBLIC_SITE_URL)
+  if (fromExplicit) return fromExplicit
+
+  const vercelUrl = process.env.VERCEL_URL || process.env.NEXT_PUBLIC_VERCEL_URL
+  if (vercelUrl) {
+    const norm = normalizeSiteUrl(vercelUrl)
+    if (norm) return norm
   }
-  
-  return companyName
-    .split('-')
-    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(' ')
+
+  // Final fallback: local dev
+  return 'http://localhost:3000'
 }
 
-export async function POST(request: Request) {
-  try {
-    const { userInput, context } = await request.json()
-    
-    console.log('=== RESOLVE COMPANY NAME ===')
-    console.log('User input:', userInput)
-    console.log('Is admin:', context?.isAdmin)
-    console.log('User company:', context?.userCompany)
-    
-    // If not admin and has a user company, check if they're trying to search their own company
-    if (!context?.isAdmin && context?.userCompany) {
-      const userCompanyScore = calculateMatchScore(userInput, context.userCompany)
-      
-      // If they're clearly referring to their own company, return it immediately
-      if (userCompanyScore > 0.7) {
-        console.log('Matched to user\'s own company')
-        return NextResponse.json({
-          matchType: 'single',
-          matches: [{
-            name: context.userCompany,
-            displayName: toDisplayName(context.userCompany),
-            confidence: userCompanyScore
-          }]
-        })
-      }
-      
-      // For non-admin users, they can only access their own company
-      console.log('Non-admin user cannot access other companies')
-      return NextResponse.json({
-        matchType: 'restricted',
-        matches: [],
-        message: `You can only access files for ${toDisplayName(context.userCompany)}`
-      })
-    }
-    
-    // For admin users or when checking all companies
-    const { data: companies, error } = await supabase
-      .from('companies')
-      .select('name')
-      .order('name')
-    
-    if (error) {
-      console.error('Error fetching companies:', error)
-      return NextResponse.json(
-        { success: false, error: 'Failed to fetch companies' },
-        { status: 500 }
-      )
-    }
-    
-    if (!companies || companies.length === 0) {
-      return NextResponse.json({
-        matchType: 'none',
-        matches: []
-      })
-    }
-    
-    // Score each company - explicit type for scored array
-    interface CompanyMatch {
-      name: string
-      displayName: string
-      confidence: number
-    }
-    
-    const scored: CompanyMatch[] = companies.map(company => ({
-      name: company.name,
-      displayName: toDisplayName(company.name),
-      confidence: calculateMatchScore(userInput, company.name)
-    }))
-    
-    // Sort by confidence
-    scored.sort((a, b) => b.confidence - a.confidence)
-    
-    // Remove duplicates based on company name (keep highest confidence)
-    const uniqueScored = scored.reduce((acc: CompanyMatch[], current) => {
-      const existing = acc.find(item => item.name === current.name)
-      if (!existing) {
-        acc.push(current)
-      }
-      return acc
-    }, [])
-    
-    // Apply confidence thresholds
-    const PERFECT_MATCH_THRESHOLD = 1.0
-    const SINGLE_MATCH_THRESHOLD = 0.85
-    const MULTIPLE_MATCH_THRESHOLD = 0.6
-    
-    // Check for perfect match (exactly 1.0 confidence)
-    const perfectMatches = uniqueScored.filter(s => s.confidence === PERFECT_MATCH_THRESHOLD)
-    const highConfidenceMatches = uniqueScored.filter(s => s.confidence >= SINGLE_MATCH_THRESHOLD)
-    const mediumConfidenceMatches = uniqueScored.filter(s => s.confidence >= MULTIPLE_MATCH_THRESHOLD)
-    
-    console.log('Scoring results:', {
-      totalCompanies: companies.length,
-      uniqueCompanies: uniqueScored.length,
-      perfectMatches: perfectMatches.length,
-      highConfidence: highConfidenceMatches.length,
-      mediumConfidence: mediumConfidenceMatches.length,
-      topMatch: uniqueScored[0]
-    })
-    
-    // Decision logic - improved to handle perfect matches better
-    if (perfectMatches.length === 1) {
-      // Single perfect match - use it automatically
-      console.log('Single perfect match found')
-      return NextResponse.json({
-        matchType: 'single',
-        matches: [perfectMatches[0]]
-      })
-    }
-    
-    if (perfectMatches.length > 1) {
-      // Multiple perfect matches (likely duplicates or very similar names)
-      // Still need clarification but these are the most likely
-      console.log(`Found ${perfectMatches.length} perfect matches, need clarification`)
-      return NextResponse.json({
-        matchType: 'multiple',
-        matches: perfectMatches
-      })
-    }
-    
-    if (highConfidenceMatches.length === 1) {
-      // Single high-confidence match - proceed automatically
-      console.log('Single high-confidence match found')
-      return NextResponse.json({
-        matchType: 'single',
-        matches: [highConfidenceMatches[0]]
-      })
-    }
-    
-    if (mediumConfidenceMatches.length > 0) {
-      // Multiple possible matches - need clarification
-      console.log(`Found ${mediumConfidenceMatches.length} possible matches`)
-      return NextResponse.json({
-        matchType: 'multiple',
-        matches: mediumConfidenceMatches.slice(0, 10) // Limit to top 10
-      })
-    }
-    
-    // No good matches found
-    console.log('No matches found above threshold')
-    
-    // Suggest top 3 companies as alternatives
-    const suggestions = uniqueScored.slice(0, 3).filter(s => s.confidence > 0.3)
-    
-    return NextResponse.json({
-      matchType: 'none',
-      matches: [],
-      suggestions: suggestions.length > 0 ? suggestions : undefined
-    })
-    
-  } catch (error) {
-    console.error('Company resolution error:', error)
-    return NextResponse.json(
-      { success: false, error: 'Failed to resolve company name' },
-      { status: 500 }
-    )
+/** Main export your tool runner should call. */
+export async function resolve_company_name(args: ResolveCompanyArgs): Promise<ResolveCompanyResponse> {
+  const origin = getOrigin()
+  const url = `${origin}/api/ai/tools/resolve_company_name`
+
+  // DEBUG LOGS: show exactly what this function will use in prod
+  console.log('[resolve_company_name] origin:', origin)
+  console.log('[resolve_company_name] env check:', {
+    NEXT_PUBLIC_SITE_URL: process.env.NEXT_PUBLIC_SITE_URL ? 'set' : 'unset',
+    VERCEL_URL: process.env.VERCEL_URL ? 'set' : 'unset',
+    NEXT_PUBLIC_VERCEL_URL: process.env.NEXT_PUBLIC_VERCEL_URL ? 'set' : 'unset',
+    NODE_ENV: process.env.NODE_ENV,
+  })
+
+  const res = await fetch(url, {
+    method: 'POST',
+    cache: 'no-store',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      userInput: args.userInput,
+      context: args.context ?? {},
+    }),
+  })
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    return { success: false, error: `Request failed: ${res.status} ${res.statusText} ${text}` }
   }
+
+  const data = (await res.json()) as ResolveCompanyResponse
+  return data
 }
+
+// Optional default export if your loader expects it:
+export default resolve_company_name

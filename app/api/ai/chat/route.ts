@@ -12,6 +12,30 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 })
 
+// -------------------- ORIGIN RESOLUTION (fixes localhost in prod) --------------------
+function normalizeSiteUrl(raw?: string | null): string | null {
+  if (!raw) return null
+  let s = raw.trim()
+  if (!s) return null
+  if (!/^https?:\/\//i.test(s)) s = `https://${s}`
+  return s.replace(/\/$/, '')
+}
+
+function getOrigin(): string {
+  // 1) You set this in Vercel (e.g., https://fleetadvisor.ai)
+  const explicit = normalizeSiteUrl(process.env.NEXT_PUBLIC_SITE_URL)
+  if (explicit) return explicit
+
+  // 2) Vercel-provided host for previews/prod
+  const vercelHost = process.env.VERCEL_URL || process.env.NEXT_PUBLIC_VERCEL_URL
+  const vercelUrl = normalizeSiteUrl(vercelHost)
+  if (vercelUrl) return vercelUrl
+
+  // 3) Local dev
+  return 'http://localhost:3000'
+}
+// ------------------------------------------------------------------------------------
+
 // Tool definitions for OpenAI
 const tools: OpenAI.Chat.ChatCompletionTool[] = [
   {
@@ -115,7 +139,6 @@ interface ToolResult {
   result: unknown
 }
 
-// Type for tool calls to handle OpenAI's union type
 interface FunctionToolCall {
   id: string
   function?: {
@@ -266,12 +289,16 @@ ${Object.entries(context.resolvedCompanies).map(([display, actual]) =>
 // Execute tool calls
 async function executeTool(name: string, args: Record<string, unknown>, context: ConversationContext) {
   console.log(`Executing tool: ${name}`, args)
-  
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
-  
+
+  // 🔧 FIXED: build a correct origin for dev/prod (uses NEXT_PUBLIC_SITE_URL you set)
+  const origin = getOrigin()
+  const url = `${origin}/api/ai/tools/${name}`
+  console.log('[chat.executeTool] origin:', origin, 'url:', url)
+
   try {
-    const response = await fetch(`${baseUrl}/api/ai/tools/${name}`, {
+    const response = await fetch(url, {
       method: 'POST',
+      cache: 'no-store',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
         ...args, 
@@ -413,7 +440,6 @@ export async function POST(request: Request) {
       const toolMessages: OpenAI.Chat.ChatCompletionToolMessageParam[] = []
       
       for (const toolCall of responseMessage.tool_calls) {
-        // Cast to our interface to handle union type
         const functionCall = toolCall as FunctionToolCall
         
         if (!functionCall.function) {
@@ -436,12 +462,12 @@ export async function POST(request: Request) {
           continue
         }
         
-        // Execute the tool
+        // Execute the tool (now uses correct origin)
         const result = await executeTool(functionName, functionArgs, context)
         
         // Track resolved company names
-        if (functionName === 'resolve_company_name' && result.matches) {
-          result.matches.forEach((match: { name?: string; displayName?: string }) => {
+        if (functionName === 'resolve_company_name' && (result as any)?.matches) {
+          ;(result as any).matches.forEach((match: { name?: string; displayName?: string }) => {
             if (match.name && match.displayName) {
               context.resolvedCompanies[match.displayName] = match.name
             }
@@ -489,7 +515,7 @@ export async function POST(request: Request) {
     const files = allToolResults
       .filter(tr => {
         const res = tr.result as Record<string, unknown>
-        return res && Array.isArray(res.files)
+        return res && Array.isArray((res as any).files)
       })
       .flatMap(tr => {
         const res = tr.result as { files: unknown[] }
