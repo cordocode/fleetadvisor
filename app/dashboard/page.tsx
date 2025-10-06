@@ -25,7 +25,6 @@ interface ChatMessage {
 }
 
 export default function Dashboard() {
-  const [companyName, setCompanyName] = useState<string>('')
   const [companyDisplayName, setCompanyDisplayName] = useState<string>('')
   const [userId, setUserId] = useState<string>('')
   const [isAdmin, setIsAdmin] = useState(false)
@@ -115,8 +114,6 @@ export default function Dashboard() {
             .single()
 
           if (companyData) {
-            setCompanyName(companyData.name)
-
             // Format display name
             let displayName = companyData.name
               .split('-')
@@ -297,17 +294,17 @@ export default function Dashboard() {
                 <ul className="space-y-2">
                   {isAdmin ? (
                     <>
-                      <li>• "Show me Sturgeon DOT inspections from last week"</li>
-                      <li>• "Find invoices for unit 5678"</li>
-                      <li>• "What's the access code for Rocky Mountain?"</li>
-                      <li>• "Show me all Enterprise files from October"</li>
+                      <li>• &ldquo;Show me Sturgeon DOT inspections from last week&rdquo;</li>
+                      <li>• &ldquo;Find invoices for unit 5678&rdquo;</li>
+                      <li>• &ldquo;What&apos;s the access code for Rocky Mountain?&rdquo;</li>
+                      <li>• &ldquo;Show me all Enterprise files from October&rdquo;</li>
                     </>
                   ) : (
                     <>
-                      <li>• "Show me DOT inspections from last week"</li>
-                      <li>• "Find invoice 46270"</li>
-                      <li>• "Show files for unit 112"</li>
-                      <li>• "Get me documents from this month"</li>
+                      <li>• &ldquo;Show me DOT inspections from last week&rdquo;</li>
+                      <li>• &ldquo;Find invoice 46270&rdquo;</li>
+                      <li>• &ldquo;Show files for unit 112&rdquo;</li>
+                      <li>• &ldquo;Get me documents from this month&rdquo;</li>
                     </>
                   )}
                 </ul>

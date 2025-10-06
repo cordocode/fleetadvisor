@@ -16,9 +16,21 @@ interface SearchParams {
   limit?: number
 }
 
+interface FileResult {
+  url: string
+  name: string
+  date: string
+  unit: string
+  vin: string
+  plate: string
+  company: string
+  documentType: string
+  bucket: string
+}
+
 interface SearchResponse {
   success: boolean
-  files: any[]
+  files: FileResult[]
   count: number
   totalMatches: number
   metadata: {
@@ -138,25 +150,19 @@ function inDateRange(name: string, range: { start: Date, end: Date } | null) {
   return fileDate >= range.start && fileDate <= range.end
 }
 
-export async function GET(req: Request) {
+export async function POST(req: Request) {
   try {
-    const { searchParams } = new URL(req.url)
-    const company = searchParams.get('company') ?? undefined
-    const unit = searchParams.get('unit') ?? undefined
-    const vin = searchParams.get('vin') ?? undefined
-    const plate = searchParams.get('plate') ?? undefined
-    const dateRangeParam = searchParams.get('dateRange') ?? undefined
-    const limitParam = searchParams.get('limit') ?? undefined
-    const limit = Math.max(1, Math.min(200, Number(limitParam) || 50))
-
-    const dateFilter = parseDateRange(dateRangeParam)
+    const body = await req.json()
+    const { company, unit, vin, plate, dateRange, limit = 15 } = body
+    
+    const dateFilter = parseDateRange(dateRange)
 
     const filters: SearchParams = {
       company,
       unit,
       vin,
       plate,
-      dateRange: dateRangeParam,
+      dateRange,
       limit
     }
 
@@ -169,7 +175,7 @@ export async function GET(req: Request) {
 
     // List objects from DOT bucket
     const bucket = 'DOT'
-    const { data, error } = await supabase.storage.from(bucket).list(company, { limit: 1000 })
+    const { data, error } = await supabase.storage.from(bucket).list('', { limit: 1000 })
     if (error) {
       console.error('Supabase list error:', error.message)
       return NextResponse.json(
@@ -191,7 +197,7 @@ export async function GET(req: Request) {
 
     const sliced = matchingFiles.slice(0, limit)
 
-    const filesWithUrls = sliced.map((f) => {
+    const filesWithUrls: FileResult[] = sliced.map((f) => {
       const path = `${company}/${f.name}`
       const url = buildFileUrl(bucket, path)
       const docType = 'DOT Inspection'

@@ -17,9 +17,22 @@ interface SearchParams {
   limit?: number
 }
 
+interface FileResult {
+  url: string
+  name: string
+  date: string
+  invoice: string
+  unit: string
+  vin: string
+  plate: string
+  company: string
+  documentType: string
+  bucket: string
+}
+
 interface SearchResponse {
   success: boolean
-  files: any[]
+  files: FileResult[]
   count: number
   totalMatches: number
   metadata: {
@@ -141,19 +154,12 @@ function inDateRange(name: string, range: { start: Date, end: Date } | null) {
   return fileDate >= range.start && fileDate <= range.end
 }
 
-export async function GET(req: Request) {
+export async function POST(req: Request) {
   try {
-    const { searchParams } = new URL(req.url)
-    const company = searchParams.get('company') ?? undefined
-    const unit = searchParams.get('unit') ?? undefined
-    const vin = searchParams.get('vin') ?? undefined
-    const plate = searchParams.get('plate') ?? undefined
-    const invoice = searchParams.get('invoice') ?? undefined
-    const dateRangeParam = searchParams.get('dateRange') ?? undefined
-    const limitParam = searchParams.get('limit') ?? undefined
-    const limit = Math.max(1, Math.min(200, Number(limitParam) || 50))
-
-    const dateFilter = parseDateRange(dateRangeParam)
+    const body = await req.json()
+    const { company, unit, vin, plate, invoice, dateRange, limit = 15 } = body
+    
+    const dateFilter = parseDateRange(dateRange)
 
     const filters: SearchParams = {
       company,
@@ -161,7 +167,7 @@ export async function GET(req: Request) {
       vin,
       plate,
       invoice,
-      dateRange: dateRangeParam,
+      dateRange,
       limit
     }
 
@@ -174,7 +180,7 @@ export async function GET(req: Request) {
 
     // List objects from INVOICE bucket
     const bucket = 'INVOICE'
-    const { data, error } = await supabase.storage.from(bucket).list(company, { limit: 1000 })
+    const { data, error } = await supabase.storage.from(bucket).list('', { limit: 1000 })
     if (error) {
       console.error('Supabase list error:', error.message)
       return NextResponse.json(
@@ -185,7 +191,7 @@ export async function GET(req: Request) {
 
     const entries = data || []
     const matchingFiles = entries
-      .filter((f) => f.name.toLowerCase().includes('__invoice__'))
+      .filter((f) => !f.name.toLowerCase().includes('__dot__')) // INVOICE files should NOT have __dot__
       .filter((f) => matchesInvoice(f.name, invoice))
       .filter((f) => matchesUnit(f.name, unit))
       .filter((f) => matchesVin(f.name, vin))
@@ -196,14 +202,14 @@ export async function GET(req: Request) {
 
     const sliced = matchingFiles.slice(0, limit)
 
-    const filesWithUrls = sliced.map((f) => {
+    const filesWithUrls: FileResult[] = sliced.map((f) => {
       const path = `${company}/${f.name}`
       const url = buildFileUrl(bucket, path)
       const docType = 'Invoice'
       const unitMatch = f.name.match(/__U-(\w+)/i)
       const vinMatch = f.name.match(/__V-([A-HJ-NPR-Z0-9]+)/i)
       const plateMatch = f.name.match(/__P-([\w-]+)/i)
-      const invoiceMatch = f.name.match(/invoice[-_ ]?(\w+)/i) || f.name.match(/__I-(\w+)/i)
+      const invoiceMatch = f.name.match(/I-(\w+)/i)
       const dateMatch = f.name.match(/__D-(\d{8})/)
 
       const date = dateMatch ? `${dateMatch[1].slice(0,4)}-${dateMatch[1].slice(4,6)}-${dateMatch[1].slice(6,8)}` : 'Unknown'

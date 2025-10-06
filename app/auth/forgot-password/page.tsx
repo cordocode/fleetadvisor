@@ -2,7 +2,6 @@
 
 import { useState } from 'react';
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
-import { useRouter } from 'next/navigation';
 
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState('');
@@ -11,7 +10,6 @@ export default function ForgotPasswordPage() {
   const [error, setError] = useState<string | null>(null);
   const [emailSent, setEmailSent] = useState(false);
   
-  const router = useRouter();
   const supabase = createClientComponentClient();
 
   const handleResetPassword = async (e: React.FormEvent) => {
