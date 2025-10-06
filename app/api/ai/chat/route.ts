@@ -155,7 +155,7 @@ When searching, always clarify which company if not specified.`
 }
 
 // Execute tool calls
-async function executeTool(name: string, args: any, context: ConversationContext) {
+async function executeTool(name: string, args: Record<string, unknown>, context: ConversationContext) {
   console.log(`Executing tool: ${name}`, args)
   
   // Get base URL from environment or use default
@@ -278,23 +278,33 @@ export async function POST(request: Request) {
     // Execute any tool calls
     const toolResults = []
     for (const toolCall of toolCalls) {
-      // Handle the tool call - check if it has the expected structure
-      let functionName: string
-      let functionArgs: any
+      // Handle different tool call types from OpenAI
+      let functionName: string = ''
+      let functionArgs: Record<string, unknown> = {}
       
-      // Handle different possible structures
-      if ('function' in toolCall && typeof toolCall.function === 'object') {
-        functionName = (toolCall.function as any).name
-        functionArgs = JSON.parse((toolCall.function as any).arguments)
+      // Use type assertion with known OpenAI structure
+      const call = toolCall as { 
+        type?: string
+        function?: { 
+          name: string
+          arguments: string 
+        }
+      }
+      
+      if (call.function?.name) {
+        functionName = call.function.name
+        try {
+          functionArgs = JSON.parse(call.function.arguments)
+        } catch (e) {
+          console.error('Error parsing function arguments:', e)
+          continue
+        }
       } else {
-        // Fallback - try to access properties directly
-        functionName = (toolCall as any).function?.name || ''
-        const argsString = (toolCall as any).function?.arguments || '{}'
-        functionArgs = JSON.parse(argsString)
+        console.error('Invalid tool call structure:', toolCall)
+        continue
       }
       
       if (!functionName) {
-        console.error('Invalid tool call structure:', toolCall)
         continue
       }
       
@@ -308,10 +318,13 @@ export async function POST(request: Request) {
       
       // Update context if company was resolved
       if (functionName === 'resolve_company_name' && result.matchType === 'single') {
-        context.lastResolvedCompany = {
-          userInput: functionArgs.userInput,
-          resolvedName: result.matches[0].name,
-          messageIndex: messages.length
+        const userInput = functionArgs.userInput
+        if (typeof userInput === 'string' && result.matches && result.matches[0]) {
+          context.lastResolvedCompany = {
+            userInput: userInput,
+            resolvedName: result.matches[0].name,
+            messageIndex: messages.length
+          }
         }
       }
     }

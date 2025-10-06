@@ -13,11 +13,6 @@ interface CompanyMatch {
   confidence: number
 }
 
-interface ResolveResult {
-  matchType: 'single' | 'multiple' | 'none'
-  matches: CompanyMatch[]
-}
-
 // Calculate Levenshtein distance for fuzzy matching
 function levenshteinDistance(str1: string, str2: string): number {
   const matrix = []
