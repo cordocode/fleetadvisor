@@ -418,7 +418,7 @@ export default function Dashboard() {
                           style={{ animationDelay: '0.2s' }}
                         />
                       </div>
-                      <span className="text-sm text-gray-500">Searching...</span>
+                      <span className="text-sm text-gray-500">Working...</span>
                     </div>
                   </div>
                 </div>

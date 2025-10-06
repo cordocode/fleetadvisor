@@ -63,9 +63,30 @@ function parseDateRange(dateRange: string): { start: Date; end: Date } | null {
   }
 }
 
+// Extract metadata from filename
+function parseFileName(fileName: string) {
+  const companyMatch = fileName.match(/^([^_]+)__/)
+  const invoiceMatch = fileName.match(/__I-([^_]+)/i)
+  const unitMatch = fileName.match(/__U-([^_]+)/i)
+  const vinMatch = fileName.match(/__V-([^_]+)/i)
+  const plateMatch = fileName.match(/__P-([^.]+)/i)
+  const dateMatch = fileName.match(/__D-(\d{8})/)
+  const isDot = fileName.includes('__dot__')
+  
+  return {
+    company: companyMatch ? companyMatch[1] : null,
+    invoice: invoiceMatch ? invoiceMatch[1] : 'NA',
+    unit: unitMatch ? unitMatch[1] : 'NA',
+    vin: vinMatch ? vinMatch[1] : 'NA',
+    plate: plateMatch ? plateMatch[1] : 'NA',
+    date: dateMatch ? dateMatch[1] : null,
+    isDot
+  }
+}
+
 // Check if file date is in range
-function isDateInRange(fileDate: string, range: { start: Date; end: Date }): boolean {
-  if (fileDate.length !== 8) return false
+function isDateInRange(fileDate: string | null, range: { start: Date; end: Date }): boolean {
+  if (!fileDate || fileDate.length !== 8) return false
   
   const month = parseInt(fileDate.substring(0, 2))
   const day = parseInt(fileDate.substring(2, 4))
@@ -75,27 +96,6 @@ function isDateInRange(fileDate: string, range: { start: Date; end: Date }): boo
   
   const date = new Date(year, month - 1, day)
   return date >= range.start && date <= range.end
-}
-
-// Extract metadata from filename
-function parseFileName(fileName: string) {
-  const companyMatch = fileName.match(/^([^_]+)__/)
-  const invoiceMatch = fileName.match(/I-([^_]+)__/)
-  const unitMatch = fileName.match(/U-([^_]+)__/)
-  const vinMatch = fileName.match(/V-([^_]+)__/)
-  const plateMatch = fileName.match(/P-([^.]+)/)
-  const dateMatch = fileName.match(/D-(\d{8})/)
-  const isDot = fileName.includes('__dot__')
-  
-  return {
-    company: companyMatch ? companyMatch[1] : 'unknown',
-    invoice: invoiceMatch ? invoiceMatch[1] : 'NA',
-    unit: unitMatch ? unitMatch[1] : 'NA',
-    vin: vinMatch ? vinMatch[1] : 'NA',
-    plate: plateMatch ? plateMatch[1] : 'NA',
-    date: dateMatch ? dateMatch[1] : 'unknown',
-    isDot
-  }
 }
 
 export async function POST(request: Request) {
@@ -151,25 +151,39 @@ export async function POST(request: Request) {
     const companyCounts: Record<string, number> = {}
     
     for (const file of (files || [])) {
-      // Only process PDF files
-      if (!file.name.endsWith('.pdf')) continue
+      // Trim any spaces and only process PDF files
+      const fileName = file.name.trim()
+      if (!fileName.endsWith('.pdf')) continue
       
-      const metadata = parseFileName(file.name)
+      const metadata = parseFileName(fileName)
       
       // For DOT bucket, must have __dot__ marker
       // For INVOICE bucket, must NOT have __dot__ marker
       if (countParams.docType === 'dot' && !metadata.isDot) continue
       if (countParams.docType === 'invoice' && metadata.isDot) continue
       
-      // Apply filters
-      if (countParams.company && metadata.company !== countParams.company) continue
-      if (countParams.unit && countParams.unit !== 'NA' && metadata.unit !== countParams.unit) continue
-      if (countParams.invoice && countParams.invoice !== 'NA' && metadata.invoice !== countParams.invoice) continue
-      if (countParams.vin && countParams.vin !== 'NA' && metadata.vin !== countParams.vin) continue
-      if (countParams.plate && countParams.plate !== 'NA' && metadata.plate !== countParams.plate) continue
+      // Company filter - check if filename starts with company name
+      if (countParams.company) {
+        if (!fileName.toLowerCase().startsWith(countParams.company.toLowerCase() + '__')) {
+          continue
+        }
+      }
+      
+      // Apply other filters
+      if (countParams.unit && countParams.unit !== 'NA' && metadata.unit.toLowerCase() !== countParams.unit.toLowerCase()) continue
+      if (countParams.invoice && countParams.invoice !== 'NA' && !metadata.invoice.toLowerCase().includes(countParams.invoice.toLowerCase())) continue
+      if (countParams.vin && countParams.vin !== 'NA') {
+        // Allow partial VIN matching
+        if (countParams.vin.length <= 8) {
+          if (!metadata.vin.toLowerCase().endsWith(countParams.vin.toLowerCase())) continue
+        } else {
+          if (!metadata.vin.toLowerCase().includes(countParams.vin.toLowerCase())) continue
+        }
+      }
+      if (countParams.plate && countParams.plate !== 'NA' && !metadata.plate.toLowerCase().includes(countParams.plate.toLowerCase())) continue
       
       // Date filter
-      if (dateFilter && metadata.date !== 'unknown') {
+      if (dateFilter && metadata.date) {
         if (!isDateInRange(metadata.date, dateFilter)) continue
       }
       
@@ -177,7 +191,7 @@ export async function POST(request: Request) {
       matchingCount++
       
       // Track per-company counts for admin users
-      if (context.isAdmin) {
+      if (context.isAdmin && metadata.company) {
         companyCounts[metadata.company] = (companyCounts[metadata.company] || 0) + 1
       }
     }

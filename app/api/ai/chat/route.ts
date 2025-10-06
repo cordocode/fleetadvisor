@@ -110,8 +110,17 @@ interface ConversationContext {
 
 interface ToolResult {
   tool: string
-  args: Record<string, any>
-  result: any
+  args: Record<string, unknown>
+  result: unknown
+}
+
+// Type for tool calls to handle OpenAI's union type
+interface FunctionToolCall {
+  id: string
+  function?: {
+    name: string
+    arguments: string
+  }
 }
 
 // Get system prompt based on user role
@@ -161,7 +170,7 @@ You can only search within this company's files.`
 }
 
 // Execute tool calls
-async function executeTool(name: string, args: Record<string, any>, context: ConversationContext) {
+async function executeTool(name: string, args: Record<string, unknown>, context: ConversationContext) {
   console.log(`Executing tool: ${name}`, args)
   
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
@@ -261,8 +270,8 @@ export async function POST(request: Request) {
         content: msg.message_content
       }))
     
-    // Build initial messages for OpenAI
-    let messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+    // Build initial messages for OpenAI - mutable array
+    const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
       { role: 'system', content: getSystemPrompt(context) },
       ...conversationHistory
     ]
@@ -270,7 +279,7 @@ export async function POST(request: Request) {
     // Keep track of all tool results for final extraction
     const allToolResults: ToolResult[] = []
     let finalResponse = ''
-    let maxIterations = 5 // Prevent infinite loops
+    const maxIterations = 5 // Prevent infinite loops
     let iteration = 0
     
     // Main loop to handle tool calls
@@ -302,10 +311,8 @@ export async function POST(request: Request) {
       const toolMessages: OpenAI.Chat.ChatCompletionToolMessageParam[] = []
       
       for (const toolCall of responseMessage.tool_calls) {
-        // Handle the union type properly
-        const functionCall = toolCall as OpenAI.Chat.ChatCompletionMessageToolCall & {
-          function: { name: string; arguments: string }
-        }
+        // Cast to our interface to handle union type
+        const functionCall = toolCall as FunctionToolCall
         
         if (!functionCall.function) {
           console.error('Invalid tool call structure:', toolCall)
@@ -313,7 +320,7 @@ export async function POST(request: Request) {
         }
         
         const functionName = functionCall.function.name
-        let functionArgs: Record<string, any> = {}
+        let functionArgs: Record<string, unknown> = {}
         
         try {
           functionArgs = JSON.parse(functionCall.function.arguments)
@@ -321,7 +328,7 @@ export async function POST(request: Request) {
           console.error('Error parsing function arguments:', e)
           toolMessages.push({
             role: 'tool',
-            tool_call_id: toolCall.id,
+            tool_call_id: functionCall.id,
             content: JSON.stringify({ error: 'Failed to parse arguments' })
           })
           continue
@@ -340,7 +347,7 @@ export async function POST(request: Request) {
         // Add tool response message
         toolMessages.push({
           role: 'tool',
-          tool_call_id: toolCall.id,
+          tool_call_id: functionCall.id,
           content: JSON.stringify(result)
         })
       }
@@ -349,11 +356,17 @@ export async function POST(request: Request) {
       messages.push({
         role: 'assistant',
         content: responseMessage.content || null,
-        tool_calls: responseMessage.tool_calls.map(tc => ({
-          id: tc.id,
-          type: 'function' as const,
-          function: (tc as any).function
-        }))
+        tool_calls: responseMessage.tool_calls.map(tc => {
+          const fcall = tc as FunctionToolCall
+          return {
+            id: fcall.id,
+            type: 'function' as const,
+            function: {
+              name: fcall.function?.name || '',
+              arguments: fcall.function?.arguments || '{}'
+            }
+          }
+        })
       })
       messages.push(...toolMessages)
       
@@ -361,10 +374,16 @@ export async function POST(request: Request) {
       context.totalTokensUsed += completion.usage?.total_tokens || 0
     }
     
-    // Extract files from all tool results
+    // Extract files from all tool results - type-safe access
     const files = allToolResults
-      .filter(tr => tr.result.files)
-      .flatMap(tr => tr.result.files)
+      .filter(tr => {
+        const res = tr.result as Record<string, unknown>
+        return res && Array.isArray(res.files)
+      })
+      .flatMap(tr => {
+        const res = tr.result as { files: unknown[] }
+        return res.files
+      })
     
     // Store assistant response
     await supabase
