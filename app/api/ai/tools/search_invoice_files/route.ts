@@ -206,7 +206,7 @@ export async function POST(req: Request) {
     const bucket = 'INVOICE'
     const { data: files, error } = await supabase.storage
       .from(bucket)
-      .list('', { limit: 1000 }) // List files at root
+      .list('') // List ALL files at root
     
     if (error) {
       console.error('Supabase list error:', error)
