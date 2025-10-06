@@ -200,7 +200,7 @@ export async function POST(req: Request) {
     const bucket = 'DOT'
     const { data: files, error } = await supabase.storage
       .from(bucket)
-      .list('') // List ALL files at root
+      .list('', { limit: 10000 }) // Set high limit to get all files
     
     if (error) {
       console.error('Supabase list error:', error)
