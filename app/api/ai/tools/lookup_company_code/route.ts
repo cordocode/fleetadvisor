@@ -7,12 +7,6 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
-interface Context {
-  isAdmin: boolean
-  userCompany: string | null
-  userId: string
-}
-
 // Convert kebab-case to display name
 function toDisplayName(companyName: string): string {
   if (companyName === 'fleet-advisor-ai-admin') {

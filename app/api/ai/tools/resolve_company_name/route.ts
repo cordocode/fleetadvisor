@@ -7,12 +7,6 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
-interface CompanyMatch {
-  name: string
-  displayName: string
-  confidence: number
-}
-
 // Calculate Levenshtein distance for fuzzy matching
 function levenshteinDistance(str1: string, str2: string): number {
   const matrix = []
@@ -149,8 +143,14 @@ export async function POST(request: Request) {
       })
     }
     
-    // Score each company
-    const scored = companies.map(company => ({
+    // Score each company - explicit type for scored array
+    interface CompanyMatch {
+      name: string
+      displayName: string
+      confidence: number
+    }
+    
+    const scored: CompanyMatch[] = companies.map(company => ({
       name: company.name,
       displayName: toDisplayName(company.name),
       confidence: calculateMatchScore(userInput, company.name)

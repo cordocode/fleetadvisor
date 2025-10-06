@@ -184,8 +184,21 @@ export async function POST(request: Request) {
     
     console.log(`Found ${matchingCount} matching ${countParams.docType} files`)
     
-    // Prepare response
-    const response: any = {
+    // Prepare response with explicit typing
+    interface DocumentCountResponse {
+      success: boolean
+      count: number
+      docType: string
+      bucket: string
+      exceedsLimit: boolean
+      searchParams: CountParams
+      companyBreakdown?: Record<string, number>
+      companiesFound?: number
+      recommendation?: string
+      suggestions?: string[]
+    }
+    
+    const response: DocumentCountResponse = {
       success: true,
       count: matchingCount,
       docType: countParams.docType,
