@@ -9,7 +9,6 @@ const supabase = createClient(
 
 interface SearchParams {
   company?: string
-  invoice?: string
   unit?: string
   vin?: string
   plate?: string
@@ -21,7 +20,6 @@ interface FileResult {
   url: string
   name: string
   date: string
-  invoice: string
   unit: string
   vin: string
   plate: string
@@ -90,6 +88,7 @@ function parseDateRange(dateRange?: string) {
       return { start, end }
     }
     default:
+      // Handle "September 2025" or "2025-09-01 to 2025-09-30" formats
       if (dateRange.includes(' to ')) {
         const [startStr, endStr] = dateRange.split(' to ')
         return {
@@ -98,6 +97,7 @@ function parseDateRange(dateRange?: string) {
         }
       }
 
+      // Try to parse single month name + year
       const tryDate = new Date(dateRange)
       if (!isNaN(tryDate.getTime())) {
         const start = new Date(tryDate.getFullYear(), tryDate.getMonth(), 1)
@@ -110,12 +110,14 @@ function parseDateRange(dateRange?: string) {
 }
 
 function buildFileUrl(bucket: string, fileName: string) {
+  // Files are stored at the root of the bucket
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
   const baseUrl = supabaseUrl.replace('/project', '')
   return `${baseUrl}/storage/v1/object/public/${bucket}/${encodeURIComponent(fileName)}`
 }
 
 function parseFileName(fileName: string) {
+  // Extract metadata from filename
   const companyMatch = fileName.match(/^([^_]+)__/)
   const unitMatch = fileName.match(/__U-([^_]+)/i)
   const vinMatch = fileName.match(/__V-([^_]+)/i)
@@ -134,13 +136,8 @@ function parseFileName(fileName: string) {
 }
 
 function matchesCompany(fileName: string, company: string) {
+  // Company name should be at the start of the filename
   return fileName.toLowerCase().startsWith(company.toLowerCase() + '__')
-}
-
-function matchesInvoice(fileName: string, invoice?: string) {
-  if (!invoice || invoice === 'NA') return true
-  const metadata = parseFileName(fileName)
-  return metadata.invoice.toLowerCase().includes(invoice.toLowerCase())
 }
 
 function matchesUnit(fileName: string, unit?: string) {
@@ -152,6 +149,7 @@ function matchesUnit(fileName: string, unit?: string) {
 function matchesVin(fileName: string, vin?: string) {
   if (!vin || vin === 'NA') return true
   const metadata = parseFileName(fileName)
+  // Allow partial VIN matching (last 6 chars)
   if (vin.length <= 8) {
     return metadata.vin.toLowerCase().endsWith(vin.toLowerCase())
   }
@@ -183,10 +181,10 @@ function inDateRange(fileName: string, range: { start: Date, end: Date } | null)
 export async function POST(req: Request) {
   try {
     const body = await req.json()
-    const { company, invoice, unit, vin, plate, dateRange, limit = 15, context } = body
+    const { company, unit, vin, plate, dateRange, limit = 15, context } = body
     
     console.log('=== SEARCH DOT FILES ===')
-    console.log('Search params:', { company, invoice, unit, vin, plate, dateRange, limit })
+    console.log('Search params:', { company, unit, vin, plate, dateRange, limit })
     console.log('Context:', context)
     
     const dateFilter = parseDateRange(dateRange)
@@ -198,49 +196,38 @@ export async function POST(req: Request) {
       )
     }
 
-    // Fetch ALL files from DOT bucket using pagination
+    // List all files in DOT bucket (files are at root, not in folders)
     const bucket = 'DOT'
-    let allFiles = []
-    let offset = 0
-
-    while (true) {
-      const { data: batch, error } = await supabase.storage
-        .from(bucket)
-        .list('', { limit: 1000, offset })
-      
-      if (error) {
-        console.error('Supabase list error:', error)
-        return NextResponse.json(
-          { success: false, error: 'Storage list failed' },
-          { status: 500 }
-        )
-      }
-      
-      if (!batch || batch.length === 0) break
-      
-      allFiles.push(...batch)
-      if (batch.length < 1000) break
-      offset += 1000
+    const { data: files, error } = await supabase.storage
+      .from(bucket)
+      .list('', { limit: 1000 }) // List files at root
+    
+    if (error) {
+      console.error('Supabase list error:', error)
+      return NextResponse.json(
+        { success: false, error: 'Storage list failed' },
+        { status: 500 }
+      )
     }
 
-    console.log(`Fetched ${allFiles.length} total files from DOT bucket`)
+    console.log(`Fetched ${files?.length || 0} total files from ${bucket} bucket`)
 
     // Filter files that match criteria
-    const matchingFiles = allFiles
-      .map(f => ({ ...f, name: f.name.trim() }))
+    const matchingFiles = (files || [])
+      .map(f => ({ ...f, name: f.name.trim() })) // Trim any spaces from filenames
       .filter(f => f.name.endsWith('.pdf'))
-      .filter(f => f.name.toLowerCase().includes('__dot__'))
+      .filter(f => f.name.toLowerCase().includes('__dot__')) // Must have DOT marker
       .filter(f => matchesCompany(f.name, company))
-      .filter(f => matchesInvoice(f.name, invoice))
       .filter(f => matchesUnit(f.name, unit))
       .filter(f => matchesVin(f.name, vin))
       .filter(f => matchesPlate(f.name, plate))
       .filter(f => inDateRange(f.name, dateFilter))
 
-    // Sort by date (newest first)
+    // Sort by date (newest first) - fixed date parsing
     matchingFiles.sort((a, b) => {
       const aDate = parseFileName(a.name).date || '00000000'
       const bDate = parseFileName(b.name).date || '00000000'
+      // Convert MMDDYYYY to YYYYMMDD for proper sorting
       const aSort = aDate.length === 8 ? aDate.slice(4,8) + aDate.slice(0,4) : aDate
       const bSort = bDate.length === 8 ? bDate.slice(4,8) + bDate.slice(0,4) : bDate
       return bSort.localeCompare(aSort)
@@ -262,7 +249,6 @@ export async function POST(req: Request) {
         url,
         name: f.name,
         date: formattedDate,
-        invoice: metadata.invoice,
         unit: metadata.unit,
         vin: metadata.vin,
         plate: metadata.plate,
@@ -278,13 +264,14 @@ export async function POST(req: Request) {
       count: filesWithUrls.length,
       totalMatches: matchingFiles.length,
       metadata: {
-        searchParams: { company, invoice, unit, vin, plate, dateRange, limit },
+        searchParams: { company, unit, vin, plate, dateRange, limit },
         dateRangeApplied: !!dateFilter,
         truncated: matchingFiles.length > limit,
         bucket: 'DOT'
       }
     }
 
+    // Add message if truncated
     if (matchingFiles.length > limit) {
       response.metadata.message = `Showing ${limit} of ${matchingFiles.length} matching files. Refine your search to see different results.`
     }

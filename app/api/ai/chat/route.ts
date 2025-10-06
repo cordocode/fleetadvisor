@@ -441,7 +441,7 @@ export async function POST(request: Request) {
         
         // Track resolved company names
         if (functionName === 'resolve_company_name' && result.matches) {
-          result.matches.forEach((match: any) => {
+          result.matches.forEach((match: { name?: string; displayName?: string }) => {
             if (match.name && match.displayName) {
               context.resolvedCompanies[match.displayName] = match.name
             }
