@@ -139,12 +139,32 @@ interface ToolResult {
   result: unknown
 }
 
+// Type for tool calls to handle OpenAI's union type
 interface FunctionToolCall {
   id: string
   function?: {
     name: string
     arguments: string
   }
+}
+
+// Result shapes we care about
+type Match = { name?: string; displayName?: string; confidence?: number }
+type HasMatches = { matches?: Match[] }
+type HasFiles = { files?: unknown[] }
+
+function hasMatches(x: unknown): x is HasMatches {
+  if (typeof x !== 'object' || x === null) return false
+  if (!('matches' in x)) return false
+  const val = (x as { matches: unknown }).matches
+  return Array.isArray(val)
+}
+
+function hasFiles(x: unknown): x is HasFiles {
+  if (typeof x !== 'object' || x === null) return false
+  if (!('files' in x)) return false
+  const val = (x as { files: unknown }).files
+  return Array.isArray(val)
 }
 
 // Get system prompt based on user role
@@ -290,7 +310,7 @@ ${Object.entries(context.resolvedCompanies).map(([display, actual]) =>
 async function executeTool(name: string, args: Record<string, unknown>, context: ConversationContext) {
   console.log(`Executing tool: ${name}`, args)
 
-  // 🔧 FIXED: build a correct origin for dev/prod (uses NEXT_PUBLIC_SITE_URL you set)
+  // Build a correct origin for dev/prod (uses NEXT_PUBLIC_SITE_URL you set)
   const origin = getOrigin()
   const url = `${origin}/api/ai/tools/${name}`
   console.log('[chat.executeTool] origin:', origin, 'url:', url)
@@ -310,7 +330,7 @@ async function executeTool(name: string, args: Record<string, unknown>, context:
       })
     })
     
-    const data = await response.json()
+    const data: unknown = await response.json()
     return data
   } catch (error) {
     console.error(`Tool execution error for ${name}:`, error)
@@ -320,7 +340,15 @@ async function executeTool(name: string, args: Record<string, unknown>, context:
 
 export async function POST(request: Request) {
   try {
-    const { message, conversationId, userId } = await request.json()
+    const parsed = (await request.json()) as {
+      message: string
+      conversationId: string
+      userId: string
+    }
+
+    const message = (parsed?.message ?? '').trim()
+    const conversationId = parsed?.conversationId ?? ''
+    const userId = parsed?.userId ?? ''
     
     console.log('=== AI CHAT REQUEST ===')
     console.log('Message:', message)
@@ -341,7 +369,7 @@ export async function POST(request: Request) {
       )
     }
     
-    let userCompany = null
+    let userCompany: string | null = null
     if (profile.company_id) {
       const { data: company } = await supabase
         .from('companies')
@@ -349,11 +377,11 @@ export async function POST(request: Request) {
         .eq('id', profile.company_id)
         .single()
       
-      userCompany = company?.name || null
+      userCompany = (company?.name as string | undefined) ?? null
     }
     
     const context: ConversationContext = {
-      isAdmin: profile.is_admin || false,
+      isAdmin: Boolean(profile.is_admin),
       userCompany,
       userId,
       conversationId,
@@ -385,7 +413,7 @@ export async function POST(request: Request) {
       .order('created_at', { ascending: false })
       .limit(20)
     
-    const conversationHistory = (history || [])
+    const conversationHistory = (history ?? [])
       .reverse()
       .map(msg => ({
         role: msg.message_role === 'user' ? 'user' as const : 'assistant' as const,
@@ -394,8 +422,18 @@ export async function POST(request: Request) {
     
     // Extract previously resolved companies from history
     history?.forEach(msg => {
-      if (msg.message_metadata?.resolvedCompanies) {
-        Object.assign(context.resolvedCompanies, msg.message_metadata.resolvedCompanies)
+      const meta = msg.message_metadata as unknown
+      if (
+        typeof meta === 'object' &&
+        meta !== null &&
+        'resolvedCompanies' in meta &&
+        typeof (meta as { resolvedCompanies?: unknown }).resolvedCompanies === 'object' &&
+        (meta as { resolvedCompanies?: unknown }).resolvedCompanies !== null
+      ) {
+        Object.assign(
+          context.resolvedCompanies,
+          (meta as { resolvedCompanies: Record<string, string> }).resolvedCompanies
+        )
       }
     })
     
@@ -440,6 +478,7 @@ export async function POST(request: Request) {
       const toolMessages: OpenAI.Chat.ChatCompletionToolMessageParam[] = []
       
       for (const toolCall of responseMessage.tool_calls) {
+        // Cast to our thin interface to avoid union headaches
         const functionCall = toolCall as FunctionToolCall
         
         if (!functionCall.function) {
@@ -451,9 +490,8 @@ export async function POST(request: Request) {
         let functionArgs: Record<string, unknown> = {}
         
         try {
-          functionArgs = JSON.parse(functionCall.function.arguments)
-        } catch (e) {
-          console.error('Error parsing function arguments:', e)
+          functionArgs = JSON.parse(functionCall.function.arguments) as Record<string, unknown>
+        } catch {
           toolMessages.push({
             role: 'tool',
             tool_call_id: functionCall.id,
@@ -462,16 +500,19 @@ export async function POST(request: Request) {
           continue
         }
         
-        // Execute the tool (now uses correct origin)
-        const result = await executeTool(functionName, functionArgs, context)
+        // Execute the tool (uses correct origin)
+        const result: unknown = await executeTool(functionName, functionArgs, context)
         
-        // Track resolved company names
-        if (functionName === 'resolve_company_name' && (result as any)?.matches) {
-          ;(result as any).matches.forEach((match: { name?: string; displayName?: string }) => {
-            if (match.name && match.displayName) {
-              context.resolvedCompanies[match.displayName] = match.name
+        // Track resolved company names (no 'any' via type guard)
+        if (functionName === 'resolve_company_name' && hasMatches(result)) {
+          for (const match of result.matches ?? []) {
+            if (match && typeof match === 'object' && 'name' in match && 'displayName' in match) {
+              const m = match as { name?: string; displayName?: string }
+              if (m.name && m.displayName) {
+                context.resolvedCompanies[m.displayName] = m.name
+              }
             }
-          })
+          }
         }
         
         // Store for later
@@ -511,16 +552,10 @@ export async function POST(request: Request) {
       context.totalTokensUsed += completion.usage?.total_tokens || 0
     }
     
-    // Extract files from all tool results - type-safe access
-    const files = allToolResults
-      .filter(tr => {
-        const res = tr.result as Record<string, unknown>
-        return res && Array.isArray((res as any).files)
-      })
-      .flatMap(tr => {
-        const res = tr.result as { files: unknown[] }
-        return res.files
-      })
+    // Extract files from all tool results without 'any'
+    const files: unknown[] = allToolResults
+      .filter(tr => hasFiles(tr.result))
+      .flatMap(tr => (tr.result as HasFiles).files ?? [])
     
     // Store assistant response with resolved companies
     await supabase
