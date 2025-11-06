@@ -17,21 +17,17 @@ const openai = new OpenAI({
 
 // Service Account credentials
 function getGmailCredentials() {
-  // Try Vercel env first, fall back to local file
-  if (process.env.GOOGLE_SERVICE_ACCOUNT_GMAIL) {
-    return JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_GMAIL)
+  if (!process.env.GOOGLE_SERVICE_ACCOUNT_GMAIL) {
+    throw new Error('GOOGLE_SERVICE_ACCOUNT_GMAIL environment variable not set')
   }
-  // Local development - use file
-  return require('../../../live-retrieval/private/google-service-account.json')
+  return JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_GMAIL)
 }
 
 function getSheetsCredentials() {
-  // Try Vercel env first, fall back to local file
-  if (process.env.GOOGLE_SERVICE_ACCOUNT_SHEETS) {
-    return JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_SHEETS)
+  if (!process.env.GOOGLE_SERVICE_ACCOUNT_SHEETS) {
+    throw new Error('GOOGLE_SERVICE_ACCOUNT_SHEETS environment variable not set')
   }
-  // Local development - use file
-  return require('../../../live-retrieval/private/sheets-processor.json')
+  return JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_SHEETS)
 }
 
 // Constants
@@ -52,8 +48,8 @@ interface Attachment {
 }
 
 class FleetEmailProcessor {
-  private gmailService: gmail_v1.Gmail
-  private sheetsService: any
+  private gmailService!: gmail_v1.Gmail
+  private sheetsService!: any
   private validCompanies: Map<string, string> = new Map()
   private sortedLabelId: string | null = null
 
