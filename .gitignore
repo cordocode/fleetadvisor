@@ -42,3 +42,7 @@ next-env.d.ts
 
 # Private keys
 /private
+# Private keys - NEVER COMMIT
+app/live-retrieval/private/*.json
+.env.local.fleet
+app/live-retrieval/private/
