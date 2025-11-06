@@ -53,6 +53,7 @@ class FleetEmailProcessor {
   private sheetsService!: ReturnType<typeof google.sheets>
   private validCompanies: Map<string, string> = new Map()
   private sortedLabelId: string | null = null
+  private processedMessageIds: Set<string> = new Set()
 
   constructor() {
     // Constructor is synchronous, initialization happens in processInbox
@@ -80,8 +81,9 @@ class FleetEmailProcessor {
     
     this.sheetsService = google.sheets({ version: 'v4', auth: sheetsAuth })
     
-    // Load valid companies and label
+    // Load valid companies, processed messages, and label
     await this.loadValidCompanies()
+    await this.loadProcessedMessageIds()
     await this.getOrCreateLabel()
   }
 
@@ -91,7 +93,6 @@ class FleetEmailProcessor {
         .from('companies')
         .select('name')
       
-      // Use `error` to satisfy ESLint without changing logic
       if (error) {
         console.error('loadValidCompanies error:', error)
       }
@@ -103,9 +104,36 @@ class FleetEmailProcessor {
       }
       
       console.log(`Loaded ${this.validCompanies.size} valid companies`)
-      console.log('Valid companies:', Array.from(this.validCompanies.keys()))
     } catch (error) {
       console.error('Error loading companies:', error)
+    }
+  }
+
+  private async loadProcessedMessageIds() {
+    try {
+      const response = await this.sheetsService.spreadsheets.values.get({
+        spreadsheetId: SPREADSHEET_ID,
+        range: 'A:H'
+      })
+      
+      const rows = response.data.values || []
+      
+      // Skip header row, look for successful entries
+      for (let i = 1; i < rows.length; i++) {
+        const row = rows[i]
+        if (row.length >= 7) {
+          const messageId = row[1] // Column B
+          const status = row[6] // Column G
+          
+          if (status === 'success') {
+            this.processedMessageIds.add(messageId)
+          }
+        }
+      }
+      
+      console.log(`Loaded ${this.processedMessageIds.size} processed message IDs from spreadsheet`)
+    } catch (error) {
+      console.error('Error loading processed message IDs:', error)
     }
   }
 
@@ -163,6 +191,11 @@ class FleetEmailProcessor {
         valueInputOption: 'RAW',
         requestBody: { values }
       })
+      
+      // Add to processed set if successful
+      if (status === 'success') {
+        this.processedMessageIds.add(messageId)
+      }
     } catch (error) {
       console.error('Error logging to sheet:', error)
     }
@@ -459,38 +492,61 @@ class FleetEmailProcessor {
     }
   }
 
-  private shouldProcessEmail(message: any): boolean {
+  private validateEmail(message: any): { valid: boolean; reason: string } {
     const headers = message.payload?.headers || []
     const subject = headers.find((h: any) => h.name === 'Subject')?.value || ''
     
     // Skip replies
     if (subject.startsWith('Re:') || subject.startsWith('RE:')) {
-      return false
+      return { valid: false, reason: 'Reply email - skipped' }
     }
     
     // Check if it's the first message in thread
     const threadId = message.threadId
     const messageId = message.id
     if (threadId !== messageId) {
-      return false
+      return { valid: false, reason: 'Not first message in thread' }
     }
     
     // Check if already has the sorted label
     const labelIds = message.labelIds || []
     if (this.sortedLabelId && labelIds.includes(this.sortedLabelId)) {
-      return false
+      return { valid: false, reason: 'Already has sorted label' }
+    }
+    
+    // Check From header
+    const fromHeader = headers.find((h: any) => h.name === 'From')?.value || ''
+    if (!fromHeader.includes('@gofleetadvisor.com')) {
+      return { valid: false, reason: 'Sender not @gofleetadvisor.com' }
+    }
+    
+    // Check for invoice attachment
+    const parts = this.getMessageParts(message.payload)
+    const hasInvoice = parts.some(part => {
+      const filename = part.filename?.toLowerCase() || ''
+      return filename.startsWith('invoice') && filename.endsWith('.pdf')
+    })
+    
+    if (!hasInvoice) {
+      return { valid: false, reason: 'No invoice PDF attachment found' }
     }
     
     // Must have Fleet Advisor in subject
     if (!subject.includes('Fleet Advisor')) {
-      return false
+      return { valid: false, reason: 'Subject missing "Fleet Advisor"' }
     }
     
-    return true
+    return { valid: true, reason: '' }
   }
 
   async processEmail(messageId: string): Promise<void> {
     try {
+      // Check if already processed
+      if (this.processedMessageIds.has(messageId)) {
+        console.log(`Skipping already processed message: ${messageId}`)
+        return
+      }
+      
       const message = await this.gmailService.users.messages.get({
         userId: 'me',
         id: messageId
@@ -499,13 +555,15 @@ class FleetEmailProcessor {
       const headers = message.data.payload?.headers || []
       const subject = headers.find((h: any) => h.name === 'Subject')?.value || 'No Subject'
       
-      // Check if we should process this email
-      if (!this.shouldProcessEmail(message.data)) {
-        console.log(`Skipping email: ${subject}`)
+      console.log(`Processing: ${subject}`)
+      
+      // Check all validation criteria and log failures
+      const validationResult = this.validateEmail(message.data)
+      if (!validationResult.valid) {
+        await this.logToSheet(messageId, subject, '', '', '', 'failed', validationResult.reason)
+        console.log(`Validation failed: ${validationResult.reason}`)
         return
       }
-      
-      console.log(`Processing: ${subject}`)
       
       // Extract company FROM EMAIL BODY
       const company = this.extractCompanyName(message.data)
@@ -615,14 +673,14 @@ class FleetEmailProcessor {
     
     let processed = 0
     let failed = 0
-    const skipped = 0
+    let skipped = 0
     
     try {
       // Get messages from inbox ONLY (not already sorted)
       const response = await this.gmailService.users.messages.list({
         userId: 'me',
         labelIds: ['INBOX'],
-        q: '-label:Batch_3_sorted', // Exclude already sorted
+        q: '-label:Batch_3_sorted',
         maxResults: 50
       })
       
@@ -631,6 +689,12 @@ class FleetEmailProcessor {
       
       for (const message of messages) {
         try {
+          // Check if already processed before fetching full message
+          if (this.processedMessageIds.has(message.id!)) {
+            skipped++
+            continue
+          }
+          
           await this.processEmail(message.id!)
           processed++
         } catch (error) {
