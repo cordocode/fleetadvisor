@@ -90,6 +90,11 @@ class FleetEmailProcessor {
       const { data, error } = await supabase
         .from('companies')
         .select('name')
+
+      // Use `error` to satisfy ESLint without changing logic
+      if (error) {
+        console.error('loadValidCompanies error:', error)
+      }
       
       if (data) {
         data.forEach(company => {

@@ -1,14 +1,25 @@
 // app/admin/test-email-processor/page.tsx
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs'
 import { useRouter } from 'next/navigation'
-import { useEffect } from 'react'
+
+type ProcessorResults = {
+  processed: number
+  failed: number
+  skipped: number
+}
+
+type ProcessorResponse = {
+  timestamp?: string
+  results?: ProcessorResults
+  error?: string
+}
 
 export default function TestEmailProcessor() {
   const [loading, setLoading] = useState(false)
-  const [result, setResult] = useState<any>(null)
+  const [result, setResult] = useState<ProcessorResponse | null>(null) // (was any)
   const [error, setError] = useState<string | null>(null)
   const [isAdmin, setIsAdmin] = useState(false)
   const [checking, setChecking] = useState(true)
@@ -54,15 +65,17 @@ export default function TestEmailProcessor() {
         method: 'POST' // Using POST for manual trigger
       })
       
-      const data = await response.json()
+      const data: ProcessorResponse = await response.json() // (was any)
       
       if (response.ok) {
         setResult(data)
       } else {
         setError(data.error || 'Failed to run processor')
       }
-    } catch (err: any) {
-      setError(err.message || 'An error occurred')
+    } catch (err) { // (was err: any)
+      const message =
+        err instanceof Error ? err.message : typeof err === 'string' ? err : 'An error occurred'
+      setError(message)
     } finally {
       setLoading(false)
     }
