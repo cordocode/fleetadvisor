@@ -1,7 +1,7 @@
 {
   "crons": [
     {
-      "path": "/api/cron/process-fleet-emails",
+      "path": "/live-retrieval",
       "schedule": "*/5 * * * *"
     }
   ]

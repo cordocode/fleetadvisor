@@ -33,7 +33,7 @@ function getSheetsCredentials() {
 
 // Constants
 const EMAIL_ADDRESS = 'donotreply@gofleetadvisor.com'
-const SPREADSHEET_ID = process.env.GOOGLE_SHEET_ID || 'YOUR_SHEET_ID_HERE' // You'll need to add this
+const SPREADSHEET_ID = process.env.GOOGLE_SHEET_ID || 'YOUR_SHEET_ID_HERE'
 const SORTED_LABEL = 'Batch_3_sorted'
 
 interface EmailMetadata {
@@ -55,7 +55,7 @@ class FleetEmailProcessor {
   private sortedLabelId: string | null = null
 
   constructor() {
-    this.initializeServices()
+    // Constructor is synchronous, initialization happens in processInbox
   }
 
   private async initializeServices() {
@@ -90,7 +90,7 @@ class FleetEmailProcessor {
       const { data, error } = await supabase
         .from('companies')
         .select('name')
-
+      
       // Use `error` to satisfy ESLint without changing logic
       if (error) {
         console.error('loadValidCompanies error:', error)
@@ -103,6 +103,7 @@ class FleetEmailProcessor {
       }
       
       console.log(`Loaded ${this.validCompanies.size} valid companies`)
+      console.log('Valid companies:', Array.from(this.validCompanies.keys()))
     } catch (error) {
       console.error('Error loading companies:', error)
     }
@@ -167,6 +168,95 @@ class FleetEmailProcessor {
     }
   }
 
+  private getEmailBody(message: any, bodyType: 'plain' | 'html'): string | null {
+    try {
+      const payload = message.payload
+      
+      // Check parts
+      if (payload.parts) {
+        for (const part of payload.parts) {
+          if (part.mimeType === `text/${bodyType}`) {
+            if (part.body?.data) {
+              return Buffer.from(part.body.data, 'base64').toString('utf-8')
+            }
+          }
+        }
+      }
+      
+      // Check main body
+      if (payload.mimeType === `text/${bodyType}`) {
+        if (payload.body?.data) {
+          return Buffer.from(payload.body.data, 'base64').toString('utf-8')
+        }
+      }
+      
+      return null
+    } catch (error) {
+      console.error('Error getting email body:', error)
+      return null
+    }
+  }
+
+  private extractCompanyName(message: any): string | null {
+    try {
+      // Get plain text body first
+      let companyName = ''
+      const plainText = this.getEmailBody(message, 'plain')
+      
+      if (plainText) {
+        const textLines = plainText.split('\n')
+        if (textLines.length > 0) {
+          let firstLine = textLines[0].trim()
+          // Remove trailing comma
+          if (firstLine.endsWith(',')) {
+            firstLine = firstLine.slice(0, -1)
+          }
+          companyName = firstLine
+        }
+      }
+      
+      // Fallback to HTML if no plain text
+      if (!companyName) {
+        const htmlText = this.getEmailBody(message, 'html')
+        if (htmlText) {
+          // Look for first span content
+          const match = htmlText.match(/<span[^>]*>([^<]+)<\/span>/)
+          if (match) {
+            companyName = match[1]
+            // Clean HTML entities
+            companyName = companyName.replace(/&amp;/g, '&')
+            companyName = companyName.replace(/&nbsp;/g, ' ')
+            companyName = companyName.replace(/<[^>]*>/g, '')
+            companyName = companyName.trim()
+            if (companyName.endsWith(',')) {
+              companyName = companyName.slice(0, -1)
+            }
+          }
+        }
+      }
+      
+      // Format company name: lowercase and replace spaces with hyphens
+      if (companyName) {
+        const companyFormatted = companyName.toLowerCase().replace(/ /g, '-')
+        
+        console.log(`Extracted company: "${companyName}" -> formatted: "${companyFormatted}"`)
+        
+        // Check if it's valid
+        if (this.validCompanies.has(companyFormatted)) {
+          return companyFormatted
+        } else {
+          console.log(`Company "${companyFormatted}" not found in valid companies`)
+          return null
+        }
+      }
+      
+      return null
+    } catch (error) {
+      console.error('Error extracting company:', error)
+      return null
+    }
+  }
+
   private async getAttachments(message: any): Promise<Attachment[]> {
     const attachments: Attachment[] = []
     const parts = this.getMessageParts(message.payload)
@@ -215,40 +305,6 @@ class FleetEmailProcessor {
     return parts
   }
 
-  private extractCompanyName(message: any): string | null {
-    const payload = message.payload
-    const headers = payload.headers || []
-    const subject = headers.find((h: any) => h.name === 'Subject')?.value || ''
-    
-    // Extract company name from subject (pattern: "Company - Fleet Advisor...")
-    const match = subject.match(/^([^-]+)\s*-\s*Fleet Advisor/i)
-    if (!match) return null
-    
-    const rawCompany = match[1].trim()
-    
-    // Normalize company name to kebab-case
-    const normalizedCompany = rawCompany
-      .toLowerCase()
-      .replace(/[&]/g, 'and')
-      .replace(/[\s,.'()]+/g, '-')
-      .replace(/-+/g, '-')
-      .replace(/^-|-$/g, '')
-    
-    // Check if it's a valid company
-    if (this.validCompanies.has(normalizedCompany)) {
-      return normalizedCompany
-    }
-    
-    // Try to find a close match
-    for (const [companyName] of this.validCompanies) {
-      if (companyName.includes(normalizedCompany) || normalizedCompany.includes(companyName)) {
-        return companyName
-      }
-    }
-    
-    return null
-  }
-
   private extractInvoiceNumber(attachments: Attachment[]): string {
     // Look for invoice number in invoice filename
     const invoiceAttachment = attachments.find(att => 
@@ -256,7 +312,7 @@ class FleetEmailProcessor {
     )
     
     if (invoiceAttachment) {
-      const match = invoiceAttachment.filename.match(/invoice[_-]?(\d+)/i)
+      const match = invoiceAttachment.filename.match(/invoice[-_\s]*(\d+)/i)
       if (match) {
         return match[1]
       }
@@ -335,6 +391,9 @@ class FleetEmailProcessor {
 
   private async uploadToSupabase(fileData: Buffer, filename: string, bucket: 'INVOICE' | 'DOT'): Promise<boolean> {
     try {
+      // Trim filename just like Python does
+      filename = filename.trim()
+      
       // Check if file already exists
       const { data: existingFiles } = await supabase.storage
         .from(bucket)
@@ -416,6 +475,12 @@ class FleetEmailProcessor {
       return false
     }
     
+    // Check if already has the sorted label
+    const labelIds = message.labelIds || []
+    if (this.sortedLabelId && labelIds.includes(this.sortedLabelId)) {
+      return false
+    }
+    
     // Must have Fleet Advisor in subject
     if (!subject.includes('Fleet Advisor')) {
       return false
@@ -442,13 +507,15 @@ class FleetEmailProcessor {
       
       console.log(`Processing: ${subject}`)
       
-      // Extract company
+      // Extract company FROM EMAIL BODY
       const company = this.extractCompanyName(message.data)
       if (!company) {
         await this.logToSheet(messageId, subject, '', '', '', 'failed', 'Company not found or invalid')
         console.log('Company not found or invalid')
         return
       }
+      
+      console.log(`Company validated: ${company}`)
       
       // Get attachments
       const attachments = await this.getAttachments(message.data)
@@ -481,7 +548,7 @@ class FleetEmailProcessor {
       const emailDate = this.getEmailDate(message.data)
       
       // Build filenames
-      const invoiceFilename = `${company}__I-${invoiceNumber}__U-${metadata.unit}__V-${metadata.vin}__D-${emailDate}__P-${metadata.plate}.pdf`
+      const invoiceFilename = `${company}__I-${invoiceNumber}__U-${metadata.unit}__V-${metadata.vin}__D-${emailDate}__P-${metadata.plate}.pdf`.trim()
       let dotFilename = ''
       
       // Upload invoice
@@ -494,7 +561,7 @@ class FleetEmailProcessor {
       // Handle DOT files if present
       let dotUploaded = false
       if (dotAttachments.length > 0) {
-        dotFilename = `${company}__dot__I-${invoiceNumber}__U-${metadata.unit}__V-${metadata.vin}__D-${emailDate}__P-${metadata.plate}.pdf`
+        dotFilename = `${company}__dot__I-${invoiceNumber}__U-${metadata.unit}__V-${metadata.vin}__D-${emailDate}__P-${metadata.plate}.pdf`.trim()
         
         // Merge DOT PDFs if multiple
         const dotData = dotAttachments.length === 1
@@ -551,15 +618,16 @@ class FleetEmailProcessor {
     const skipped = 0
     
     try {
-      // Get messages from inbox
+      // Get messages from inbox ONLY (not already sorted)
       const response = await this.gmailService.users.messages.list({
         userId: 'me',
         labelIds: ['INBOX'],
-        maxResults: 50 // Process up to 50 emails per run
+        q: '-label:Batch_3_sorted', // Exclude already sorted
+        maxResults: 50
       })
       
       const messages = response.data.messages || []
-      console.log(`Found ${messages.length} messages in inbox`)
+      console.log(`Found ${messages.length} messages in inbox (excluding already sorted)`)
       
       for (const message of messages) {
         try {
@@ -586,8 +654,10 @@ class FleetEmailProcessor {
 export async function GET(request: Request) {
   // Verify this is coming from Vercel Cron (in production)
   const authHeader = request.headers.get('authorization')
-  if (process.env.NODE_ENV === 'production' && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if (process.env.NODE_ENV === 'production' && process.env.CRON_SECRET) {
+    if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
   }
   
   console.log('=== Fleet Email Processor Cron Job Started ===')
