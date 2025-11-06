@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { NextResponse } from 'next/server'
 import { google, gmail_v1 } from 'googleapis'
 import { createClient } from '@supabase/supabase-js'
@@ -49,7 +50,7 @@ interface Attachment {
 
 class FleetEmailProcessor {
   private gmailService!: gmail_v1.Gmail
-  private sheetsService!: any
+  private sheetsService!: ReturnType<typeof google.sheets>
   private validCompanies: Map<string, string> = new Map()
   private sortedLabelId: string | null = null
 
@@ -542,7 +543,7 @@ class FleetEmailProcessor {
     
     let processed = 0
     let failed = 0
-    let skipped = 0
+    const skipped = 0
     
     try {
       // Get messages from inbox
