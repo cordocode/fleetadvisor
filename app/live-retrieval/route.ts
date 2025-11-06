@@ -118,14 +118,12 @@ class FleetEmailProcessor {
       
       const rows = response.data.values || []
       
-      // Skip header row, look for successful entries
+      // Skip header row, load ALL message IDs (success AND failed)
       for (let i = 1; i < rows.length; i++) {
         const row = rows[i]
-        if (row.length >= 7) {
+        if (row.length >= 2) {
           const messageId = row[1] // Column B
-          const status = row[6] // Column G
-          
-          if (status === 'success') {
+          if (messageId) {
             this.processedMessageIds.add(messageId)
           }
         }
@@ -192,10 +190,8 @@ class FleetEmailProcessor {
         requestBody: { values }
       })
       
-      // Add to processed set if successful
-      if (status === 'success') {
-        this.processedMessageIds.add(messageId)
-      }
+      // Add to processed set (both success and failed)
+      this.processedMessageIds.add(messageId)
     } catch (error) {
       console.error('Error logging to sheet:', error)
     }
