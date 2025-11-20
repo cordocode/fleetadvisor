@@ -236,9 +236,9 @@ class FleetEmailProcessor {
         const textLines = plainText.split('\n')
         if (textLines.length > 0) {
           let firstLine = textLines[0].trim()
-          // Remove trailing comma
+          // Remove trailing comma and trim again to catch whitespace after comma
           if (firstLine.endsWith(',')) {
-            firstLine = firstLine.slice(0, -1)
+            firstLine = firstLine.slice(0, -1).trim()
           }
           companyName = firstLine
         }
@@ -258,7 +258,7 @@ class FleetEmailProcessor {
             companyName = companyName.replace(/<[^>]*>/g, '')
             companyName = companyName.trim()
             if (companyName.endsWith(',')) {
-              companyName = companyName.slice(0, -1)
+              companyName = companyName.slice(0, -1).trim()
             }
           }
         }
@@ -270,13 +270,28 @@ class FleetEmailProcessor {
         
         console.log(`Extracted company: "${companyName}" -> formatted: "${companyFormatted}"`)
         
-        // Check if it's valid
+        // 1. Try exact match
         if (this.validCompanies.has(companyFormatted)) {
+          console.log(`Exact match found: "${companyFormatted}"`)
           return companyFormatted
-        } else {
-          console.log(`Company "${companyFormatted}" not found in valid companies`)
-          return null
         }
+        
+        // 2. Try with trailing dash (for companies that legitimately end with dash)
+        const withTrailingDash = companyFormatted + '-'
+        if (this.validCompanies.has(withTrailingDash)) {
+          console.log(`Match with trailing dash: "${withTrailingDash}"`)
+          return withTrailingDash
+        }
+        
+        // 3. Fuzzy match - find closest match within 2 character edits (Levenshtein distance)
+        const fuzzyMatch = this.findFuzzyMatch(companyFormatted, 2)
+        if (fuzzyMatch) {
+          console.log(`Fuzzy match found: "${companyFormatted}" -> "${fuzzyMatch}"`)
+          return fuzzyMatch
+        }
+        
+        console.log(`Company "${companyFormatted}" not found in valid companies`)
+        return null
       }
       
       return null
@@ -284,6 +299,49 @@ class FleetEmailProcessor {
       console.error('Error extracting company:', error)
       return null
     }
+  }
+
+  private findFuzzyMatch(input: string, maxDistance: number): string | null {
+    let bestMatch: string | null = null
+    let bestDistance = maxDistance + 1
+    
+    for (const [validName] of this.validCompanies) {
+      const distance = this.levenshteinDistance(input, validName)
+      if (distance <= maxDistance && distance < bestDistance) {
+        bestDistance = distance
+        bestMatch = validName
+      }
+    }
+    
+    return bestMatch
+  }
+
+  private levenshteinDistance(str1: string, str2: string): number {
+    const len1 = str1.length
+    const len2 = str2.length
+    const matrix: number[][] = []
+
+    // Initialize matrix
+    for (let i = 0; i <= len1; i++) {
+      matrix[i] = [i]
+    }
+    for (let j = 0; j <= len2; j++) {
+      matrix[0][j] = j
+    }
+
+    // Calculate distances
+    for (let i = 1; i <= len1; i++) {
+      for (let j = 1; j <= len2; j++) {
+        const cost = str1[i - 1] === str2[j - 1] ? 0 : 1
+        matrix[i][j] = Math.min(
+          matrix[i - 1][j] + 1,      // deletion
+          matrix[i][j - 1] + 1,      // insertion
+          matrix[i - 1][j - 1] + cost // substitution
+        )
+      }
+    }
+
+    return matrix[len1][len2]
   }
 
   private async getAttachments(message: any): Promise<Attachment[]> {
