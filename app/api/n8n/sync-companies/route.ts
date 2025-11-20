@@ -1,7 +1,6 @@
 import { google } from 'googleapis';
 import { createClient } from '@supabase/supabase-js';
 import { NextResponse } from 'next/server';
-import path from 'path';
 
 // Initialize Supabase client with service role key
 const supabase = createClient(
@@ -11,40 +10,23 @@ const supabase = createClient(
 
 export async function GET() {
   try {
-    let auth;
-    
-    // Check if we have the service account as an environment variable (Vercel)
-    if (process.env.GOOGLE_SERVICE_ACCOUNT) {
-      console.log('Using Google service account from environment variable');
-      const serviceAccount = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT);
-      
-      auth = new google.auth.GoogleAuth({
-        credentials: serviceAccount,
-        scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'],
-      });
-    } 
-    // Fall back to file for local development
-    else {
-      console.log('Using Google service account from file (local development)');
-      const keyPath = path.join(process.cwd(), 'private', 'google-service-account.json');
-      
-      // Check if file exists for better error handling
-      const fs = await import('fs');
-      if (!fs.existsSync(keyPath)) {
-        throw new Error('Google service account file not found and GOOGLE_SERVICE_ACCOUNT env var not set');
-      }
-      
-      auth = new google.auth.GoogleAuth({
-        keyFile: keyPath,
-        scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'],
-      });
+    // Use the SHEETS service account that already works
+    if (!process.env.GOOGLE_SERVICE_ACCOUNT_SHEETS) {
+      throw new Error('GOOGLE_SERVICE_ACCOUNT_SHEETS environment variable not set');
     }
+    
+    const serviceAccount = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_SHEETS);
+    
+    const auth = new google.auth.GoogleAuth({
+      credentials: serviceAccount,
+      scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'],
+    });
 
     const sheets = google.sheets({ version: 'v4', auth });
     
-    // Fetch data from Google Sheets
+    // Fetch data from CUSTOMER AI CODE sheet using the new env variable
     const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: process.env.GOOGLE_SHEET_ID,
+      spreadsheetId: process.env.CUSTOMER_SHEET_ID,
       range: 'Sheet1!A:B', // Assumes Company Name in column A, Code in column B
     });
 
@@ -87,17 +69,8 @@ export async function GET() {
     let message = 'Failed to sync companies';
     if (error instanceof Error) {
       message = error.message;
-    } else if (typeof error === 'string') {
-      message = error;
-    } else {
-      try {
-        message = JSON.stringify(error);
-      } catch {
-        message = 'Unknown error';
-      }
     }
 
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
-
