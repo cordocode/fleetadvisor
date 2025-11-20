@@ -53,6 +53,8 @@ class FleetEmailProcessor {
   private sheetsService!: ReturnType<typeof google.sheets>
   private validCompanies: Map<string, string> = new Map()
   private sortedLabelId: string | null = null
+  private otherLabelId: string | null = null
+  private batchLabels: Map<string, string> = new Map()
   private processedMessageIds: Set<string> = new Set()
 
   constructor() {
@@ -140,23 +142,47 @@ class FleetEmailProcessor {
       const response = await this.gmailService.users.labels.list({ userId: 'me' })
       const labels = response.data.labels || []
       
+      // Find or create sorted label
       const existingLabel = labels.find(label => label.name === SORTED_LABEL)
       if (existingLabel) {
         this.sortedLabelId = existingLabel.id!
-        return
+      } else {
+        const createResponse = await this.gmailService.users.labels.create({
+          userId: 'me',
+          requestBody: {
+            name: SORTED_LABEL,
+            labelListVisibility: 'labelShow',
+            messageListVisibility: 'show'
+          }
+        })
+        this.sortedLabelId = createResponse.data.id!
       }
       
-      // Create label if it doesn't exist
-      const createResponse = await this.gmailService.users.labels.create({
-        userId: 'me',
-        requestBody: {
-          name: SORTED_LABEL,
-          labelListVisibility: 'labelShow',
-          messageListVisibility: 'show'
-        }
-      })
+      // Find or create Other label
+      const otherLabel = labels.find(label => label.name === 'Other')
+      if (otherLabel) {
+        this.otherLabelId = otherLabel.id!
+      } else {
+        const createResponse = await this.gmailService.users.labels.create({
+          userId: 'me',
+          requestBody: {
+            name: 'Other',
+            labelListVisibility: 'labelShow',
+            messageListVisibility: 'show'
+          }
+        })
+        this.otherLabelId = createResponse.data.id!
+      }
       
-      this.sortedLabelId = createResponse.data.id!
+      // Load all Batch_X_sorted labels
+      for (const label of labels) {
+        if (label.name?.startsWith('Batch_') && label.name.endsWith('_sorted')) {
+          this.batchLabels.set(label.id!, label.name)
+        }
+      }
+      
+      console.log(`Found ${this.batchLabels.size} batch labels: ${Array.from(this.batchLabels.values()).join(', ')}`)
+      
     } catch (error) {
       console.error('Error with label:', error)
     }
@@ -546,32 +572,121 @@ class FleetEmailProcessor {
     }
   }
 
-  private validateEmail(message: any): { valid: boolean; reason: string } {
+  private async moveReplyToOriginal(messageId: string, currentLabels: string[]): Promise<{ moved: boolean; labelName: string }> {
+    // Find existing batch label
+    let batchLabelId: string | null = null
+    let batchLabelName = 'unknown'
+    
+    for (const labelId of currentLabels) {
+      if (this.batchLabels.has(labelId)) {
+        batchLabelId = labelId
+        batchLabelName = this.batchLabels.get(labelId)!
+        break
+      }
+    }
+    
+    try {
+      if (batchLabelId) {
+        // Has batch label - just remove from INBOX
+        await this.gmailService.users.messages.modify({
+          userId: 'me',
+          id: messageId,
+          requestBody: {
+            removeLabelIds: ['INBOX']
+          }
+        })
+        console.log(`Kept reply in ${batchLabelName}, removed from INBOX`)
+        return { moved: true, labelName: batchLabelName }
+      } else {
+        // No batch label - this is a new reply, just remove from INBOX
+        await this.gmailService.users.messages.modify({
+          userId: 'me',
+          id: messageId,
+          requestBody: {
+            removeLabelIds: ['INBOX']
+          }
+        })
+        console.log('Reply removed from INBOX')
+        return { moved: true, labelName: 'removed from inbox' }
+      }
+    } catch (error) {
+      console.error('Error moving reply:', error)
+      return { moved: false, labelName: batchLabelName }
+    }
+  }
+
+  private async moveToOther(messageId: string): Promise<boolean> {
+    if (!this.otherLabelId) return false
+    
+    try {
+      await this.gmailService.users.messages.modify({
+        userId: 'me',
+        id: messageId,
+        requestBody: {
+          addLabelIds: [this.otherLabelId],
+          removeLabelIds: ['INBOX']
+        }
+      })
+      console.log('Moved to Other label')
+      return true
+    } catch (error) {
+      console.error('Error moving to Other:', error)
+      return false
+    }
+  }
+
+  private validateEmail(message: any): { valid: boolean; action: string; reason: string; currentLabels?: string[] } {
     const headers = message.payload?.headers || []
     const subject = headers.find((h: any) => h.name === 'Subject')?.value || ''
+    const labelIds = message.labelIds || []
     
-    // Skip replies
+    // Check if it's a reply - should move back to original label
     if (subject.startsWith('Re:') || subject.startsWith('RE:')) {
-      return { valid: false, reason: 'Reply email - skipped' }
+      return { 
+        valid: false, 
+        action: 'move_to_original',
+        reason: 'Reply email',
+        currentLabels: labelIds
+      }
+    }
+    
+    // Check if subject matches invoice pattern
+    if (!subject.includes('Invoice') || !subject.includes('Fleet Advisor')) {
+      return { 
+        valid: false, 
+        action: 'move_to_other',
+        reason: 'Not an invoice email - wrong subject format'
+      }
     }
     
     // Check if it's the first message in thread
     const threadId = message.threadId
     const messageId = message.id
     if (threadId !== messageId) {
-      return { valid: false, reason: 'Not first message in thread' }
+      return { 
+        valid: false, 
+        action: 'skip',
+        reason: 'Not first message in thread' 
+      }
     }
     
     // Check if already has the sorted label
-    const labelIds = message.labelIds || []
     if (this.sortedLabelId && labelIds.includes(this.sortedLabelId)) {
-      return { valid: false, reason: 'Already has sorted label' }
+      return { 
+        valid: false, 
+        action: 'skip',
+        reason: 'Already has sorted label' 
+      }
     }
     
     // Check From header
     const fromHeader = headers.find((h: any) => h.name === 'From')?.value || ''
     if (!fromHeader.includes('@gofleetadvisor.com')) {
-      return { valid: false, reason: 'Sender not @gofleetadvisor.com' }
+      return { 
+        valid: false, 
+        action: 'skip',
+        reason: 'Sender not @gofleetadvisor.com' 
+      }
     }
     
     // Check for invoice attachment
@@ -582,15 +697,14 @@ class FleetEmailProcessor {
     })
     
     if (!hasInvoice) {
-      return { valid: false, reason: 'No invoice PDF attachment found' }
+      return { 
+        valid: false, 
+        action: 'skip',
+        reason: 'No invoice PDF attachment found' 
+      }
     }
     
-    // Must have Fleet Advisor in subject
-    if (!subject.includes('Fleet Advisor')) {
-      return { valid: false, reason: 'Subject missing "Fleet Advisor"' }
-    }
-    
-    return { valid: true, reason: '' }
+    return { valid: true, action: 'process', reason: '' }
   }
 
   async processEmail(messageId: string): Promise<void> {
@@ -611,8 +725,35 @@ class FleetEmailProcessor {
       
       console.log(`Processing: ${subject}`)
       
-      // Check all validation criteria and log failures
+      // Validate and determine action
       const validationResult = this.validateEmail(message.data)
+      
+      if (validationResult.action === 'move_to_original') {
+        // Reply email - move back to original batch label or just remove from INBOX
+        const result = await this.moveReplyToOriginal(messageId, validationResult.currentLabels || [])
+        await this.logToSheet(
+          messageId, 
+          subject, 
+          '', '', '', 
+          'failed', 
+          `Reply email - ${result.labelName}`
+        )
+        return
+      }
+      
+      if (validationResult.action === 'move_to_other') {
+        // Non-invoice email - move to Other label
+        await this.moveToOther(messageId)
+        await this.logToSheet(messageId, subject, '', '', '', 'failed', validationResult.reason)
+        return
+      }
+      
+      if (validationResult.action === 'skip') {
+        // Skip without moving
+        console.log(`Skipped: ${validationResult.reason}`)
+        return
+      }
+      
       if (!validationResult.valid) {
         await this.logToSheet(messageId, subject, '', '', '', 'failed', validationResult.reason)
         console.log(`Validation failed: ${validationResult.reason}`)
